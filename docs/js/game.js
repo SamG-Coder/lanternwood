@@ -63,8 +63,14 @@ try {
   decoder.onmessage = e => { const job = pending.get(e.data.id); pending.delete(e.data.id); if (job) job.done(e.data); };
   decoder.postMessage({ init: packBuf.buffer.slice(0) });
 } catch (e) { workerOk = false; }
-const CAM = world.camera, VW = CAM.vw, VH = CAM.vh, F = CAM.f, HC = CAM.height, HOR = CAM.horizon;
+const CAM = world.camera, F = CAM.f, HC = CAM.height, HOR = CAM.horizon;
+// the game renders at a low "virtual" resolution and is upscaled by a whole number, so every game
+// pixel is exactly k x k screen pixels; the virtual size is chosen to fill the window at that k
+let VW = CAM.vw, VH = CAM.vh;
 const PATH = world.path, LEN = world.length;
+// how far up and down the player can roam: from just above the bottom of the screen to the
+// far meadow (the road itself is PATH)
+const D_NEAR = Math.max(F * HC / (HOR - 8), PATH[0] - 2.5), D_FAR = PATH[1] + 3.2;
 
 // ---------------------------------------------------------------- GL
 const canvas = $("c");
@@ -114,7 +120,10 @@ canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); fail(new 
 // ---------------------------------------------------------------- shaders
 const COMMON = `#version 300 es
 precision highp float; precision highp int; precision highp sampler2D;
-const float VW = ${VW}.0, VH = ${VH}.0, F = ${F.toFixed(3)}, HC = ${HC.toFixed(3)}, HOR = ${HOR.toFixed(3)};
+const float F = ${F.toFixed(3)}, HC = ${HC.toFixed(3)}, HOR = ${HOR.toFixed(3)};
+uniform vec2 u_vres;
+#define VW u_vres.x
+#define VH u_vres.y
 const vec3 LUM = vec3(0.2126, 0.7152, 0.0722);
 float lum(vec3 c) { return dot(c, LUM); }
 float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -155,9 +164,12 @@ void main() {
   if (p.y >= HOR - 0.5) discard;
   float d = F * HC / (HOR - p.y);
   float x = u_camX + (p.x - VW * 0.5) * d / F;
-  // texture cells about a pixel wide at every distance, snapped to powers of two (no swimming)
-  float cell = exp2(floor(log2(max(d / F * 1.6, 0.04))));
-  vec2 c = floor(vec2(x, d) / cell);
+  // texture cells 2 x 2 game pixels on the screen's own grid: each pair of rows scrolls by whole
+  // pixels at its own depth, so no cell is ever cut into part-pixels while the camera moves
+  float yb = floor(p.y / 2.0) * 2.0 + 0.5;
+  float db = F * HC / max(HOR - yb, 0.5);
+  float u = floor(p.x) - floor(VW * 0.5) + floor(u_camX * F / db + 0.5);
+  vec2 c = vec2(floor(u / 2.0), yb);
   float n = hash(c), n2 = vnoise(vec2(x, d) * 0.7), big = vnoise(vec2(x, d) * 0.08);
   int t = groundAt(x, vnoise(vec2(x * 0.05, d * 0.2)));
   vec3 alb = groundAlbedo(t, c, n, n2) * (0.8 + 0.4 * big);
@@ -490,7 +502,7 @@ void main() {
   vec2 f = (gl_FragCoord.xy - u_off) / u_scale;
   if (f.x < 0.0 || f.y < 0.0 || f.x >= VW || f.y >= VH) { o = vec4(0.027, 0.03, 0.045, 1); return; }
   vec4 c = texelFetch(cT, ivec2(f), 0);
-  vec2 uv = f / vec2(VW, VH);
+  vec2 uv = (floor(f) + 0.5) / vec2(VW, VH);   // blur, bloom and vignette per game pixel: no part-pixels
   vec3 b = texture(blurT, uv).rgb;
   float coc = clamp(abs(1.0 / max(c.a, 0.5) - 1.0 / u_focus) * 14.0 - 0.08, 0.0, 1.0) * u_dof;
   vec3 col = mix(c.rgb, b, coc);
@@ -507,13 +519,18 @@ const P = {
 
 // ---------------------------------------------------------------- targets
 const RGBA16F = [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT];
-const G = [0, 1, 2, 3, 4].map(() => texture(VW, VH, ...RGBA16F));
-const gFbo = target(G);
-const LT = texture(VW, VH, ...RGBA16F), lFbo = target([LT]);
-const CT = texture(VW, VH, ...RGBA16F, null, gl.LINEAR), cFbo = target([CT]);
-const HW = VW / 2, HH = VH / 2;
-const B = [0, 1, 2, 3].map(() => texture(HW, HH, ...RGBA16F, null, gl.LINEAR));
-const bFbo = B.map(t => target([t]));
+let G, gFbo, LT, lFbo, CT, cFbo, HW, HH, B, bFbo;
+function allocTargets() {
+  if (G) { [...G, LT, CT, ...B].forEach(t => gl.deleteTexture(t)); [gFbo, lFbo, cFbo, ...bFbo].forEach(f => gl.deleteFramebuffer(f)); }
+  G = [0, 1, 2, 3, 4].map(() => texture(VW, VH, ...RGBA16F));
+  gFbo = target(G);
+  LT = texture(VW, VH, ...RGBA16F); lFbo = target([LT]);
+  CT = texture(VW, VH, ...RGBA16F, null, gl.LINEAR); cFbo = target([CT]);
+  HW = Math.ceil(VW / 2); HH = Math.ceil(VH / 2);
+  B = [0, 1, 2, 3].map(() => texture(HW, HH, ...RGBA16F, null, gl.LINEAR));
+  bFbo = B.map(t => target([t]));
+}
+allocTargets();
 
 // ---------------------------------------------------------------- canopy volume
 // A top-down grid of the world (0.5 m cells): crown bottom, crown top, leaf density (per metre),
@@ -819,7 +836,7 @@ function update(dt) {
   st.vx += (ax * 3.4 * run * bonus - st.vx) * Math.min(1, dt * 10);
   const x0 = st.x, d0 = st.d;
   st.x = Math.max(1, Math.min(LEN - 1, st.x + st.vx * dt));
-  st.d = Math.max(PATH[0] + 0.2, Math.min(PATH[1] - 0.2, st.d + ad * 2.2 * run * bonus * dt));
+  st.d = Math.max(D_NEAR, Math.min(D_FAR, st.d + ad * 2.2 * run * bonus * dt));
   if (ax) st.facing = Math.sign(ax);
   if (st.onGround && inp.jump && !st.action) { st.vh = 5.2; st.onGround = false; st.jumps++; }
   st.vh -= 15 * dt; st.h += st.vh * dt;
@@ -920,10 +937,13 @@ function resize() {
   const dpr = devicePixelRatio || 1;
   canvas.width = Math.floor(innerWidth * dpr); canvas.height = Math.floor(innerHeight * dpr);
   canvas.style.width = innerWidth + "px"; canvas.style.height = innerHeight + "px";
-  const fit = Math.min(canvas.width / VW, canvas.height / VH), whole = Math.floor(fit);
-  const cover = Math.max(canvas.width / VW, canvas.height / VH);
-  if (UI.mobile && fit / cover > 0.82) st.scale = cover;          // phones: fill the screen, trim a little sky / foreground
-  else st.scale = whole >= 1 && whole / fit >= 0.86 ? whole : fit; // desktop: whole pixels when they fill the window well
+  // the whole-number scale that keeps the picture closest to its designed height (never much
+  // shorter, so the sky and the road both stay in view), then a virtual size that fills the window
+  let k = Math.max(1, Math.round(canvas.height / CAM.vh));
+  if (k > 1 && canvas.height / k < CAM.vh * 0.86) k--;
+  const vw = Math.min(2 * Math.ceil(canvas.width / k / 2), 2 * Math.round(CAM.vh * 1.3)), vh = Math.ceil(canvas.height / k);   // even: the centre is a pixel edge
+  st.scale = k;
+  if (vw !== VW || vh !== VH) { VW = vw; VH = vh; allocTargets(); }
   // tell the interface where the picture is, so the HUD sits inside it and not in the bars
   const dpr2 = devicePixelRatio || 1;
   document.documentElement.style.setProperty("--gx", Math.max(0, (canvas.width - VW * st.scale) / 2 / dpr2) + "px");
@@ -948,7 +968,7 @@ function fireflies(now, sun) {
   return out;
 }
 
-function setRect(prog, x0, y0, x1, y1, vw, vh) { gl.uniform4f(prog.u.u_rect, x0, y0, x1, y1); gl.uniform2f(prog.u.u_view, vw, vh); }
+function setRect(prog, x0, y0, x1, y1, vw, vh) { gl.uniform4f(prog.u.u_rect, x0, y0, x1, y1); gl.uniform2f(prog.u.u_view, vw, vh); gl.uniform2f(prog.u.u_vres, VW, VH); }
 function bindTex(prog, list) { list.forEach(([name, t], i) => { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(prog.u[name], i); }); }
 const windAt = (x, t) => { const tt = t - x / 25; return 0.55 + 0.3 * Math.sin(tt * 0.45) + 0.2 * Math.sin(tt * 1.3 + 1.7) + 0.12 * Math.sin(tt * 3.1 + 0.4); };
 
@@ -963,7 +983,7 @@ function frame(now) {
 function frameBody(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   update(dt);
-  const t = now / 1000, camX = st.camX;
+  const t = now / 1000, ppmCam = F / st.d, camX = Math.round(st.camX * ppmCam) / ppmCam;
   const sun = sunState(st.time);
   const W = +$("wind").value / 10;
 
@@ -982,7 +1002,7 @@ function frameBody(now) {
 
   gl.useProgram(P.sprite.p);
   const U = P.sprite.u;
-  gl.uniform2f(U.u_view, VW, VH); gl.uniform1f(U.u_camX, camX); gl.uniform1f(U.u_time, t);
+  gl.uniform2f(U.u_view, VW, VH); gl.uniform2f(U.u_vres, VW, VH); gl.uniform1f(U.u_camX, camX); gl.uniform1f(U.u_time, t);
   gl.activeTexture(gl.TEXTURE0); gl.uniform1i(U.t_spr, 0);
   let drawn = 0, waiting = 0, playerDrawn = false;
   const drawPlayer = () => {
