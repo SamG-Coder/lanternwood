@@ -344,7 +344,7 @@ void main() {
 const FS_STYLE = COMMON + `
 uniform sampler2D g0t, g2t, g3t, g4t, lt;
 uniform int u_bands, u_look; uniform bool u_clean, u_outline;
-uniform float u_expo, u_haze, u_time, u_night;
+uniform float u_expo, u_haze, u_time, u_night, u_hl;
 uniform vec3 u_skyTop, u_skyHor, u_hazeCol, u_sunDir, u_sunCol, u_mtn;
 uniform vec4 u_ff[8]; uniform int u_nff; uniform vec3 u_ffCol;
 uniform vec4 u_lamp; uniform vec3 u_lampCol;
@@ -441,7 +441,10 @@ void main() {
         ivec2 q = p + N4[k]; float qi = idAt(q);
         if (qi == -1.0 || (qi != id && qi != 0.0 && texelFetch(g2t, q, 0).x > dist * 1.25)) edge = true;
       }
-      if (edge) { float k = lum(s) < 0.3 ? 0.9 : 0.3; s = mix(s, s * vec3(0.45, 0.48, 0.6), k); }
+      if (edge) {
+        if (id == u_hl) s = mix(s, vec3(1.0, 0.86, 0.5), 0.85);   // the node in reach: a gold rim
+        else { float k = lum(s) < 0.3 ? 0.9 : 0.3; s = mix(s, s * vec3(0.45, 0.48, 0.6), k); }
+      }
     }
     // aerial perspective
     float hz = (1.0 - exp(-max(dist - 12.0, 0.0) / 140.0)) * u_haze;
@@ -515,19 +518,26 @@ const bFbo = B.map(t => target([t]));
 const GX0 = -260, GD0 = 0, GC = 0.5;
 const GNX = Math.ceil((LEN + 520) / GC), GND = Math.ceil(180 / GC);
 const grid = new Float32Array(GNX * GND * 4);
-for (let i = 0; i < GNX * GND; i++) { grid[i * 4] = 999; grid[i * 4 + 1] = -999; }
 function h01(a, b) { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); }
-for (const o of world.objects) {
+// which objects stand in the canopy volume (trees over 1.8 m, rocks and logs), and their footprint
+function gridShape(o) {
   const v = catalog.variants[o.v];
-  if (!v) continue;
+  if (!v) return null;
   const solid = v.kind === "rock", tree = v.kind === "tree";
-  if (!solid && !(tree && v.height > 1.8)) continue;
-  const c = v.crown;
-  const cx = o.x, cd = o.d, rad = Math.max(c.rad, 0.4);
+  if (!solid && !(tree && v.height > 1.8)) return null;
+  return { v, solid, tree, rad: Math.max(v.crown.rad, 0.4) };
+}
+function clearCells(i0, i1, j0, j1) {
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const k = (j * GNX + i) * 4; grid[k] = 999; grid[k + 1] = -999; grid[k + 2] = 0; grid[k + 3] = 0; }
+}
+function stamp(o, i0, i1, j0, j1) {
+  const g = gridShape(o); if (!g) return;
+  const { v, solid, tree, rad } = g, c = v.crown;
+  const cx = o.x, cd = o.d;
   const ch = (c.hb + c.ht) / 2, ry = Math.max((c.ht - c.hb) / 2, 0.3);
-  const i0 = Math.floor((cx - rad - GX0) / GC), i1 = Math.ceil((cx + rad - GX0) / GC);
-  const j0 = Math.floor((cd - rad - GD0) / GC), j1 = Math.ceil((cd + rad - GD0) / GC);
-  for (let j = Math.max(j0, 0); j <= Math.min(j1, GND - 1); j++) for (let i = Math.max(i0, 0); i <= Math.min(i1, GNX - 1); i++) {
+  const a0 = Math.max(Math.floor((cx - rad - GX0) / GC), i0), a1 = Math.min(Math.ceil((cx + rad - GX0) / GC), i1);
+  const b0 = Math.max(Math.floor((cd - rad - GD0) / GC), j0), b1 = Math.min(Math.ceil((cd + rad - GD0) / GC), j1);
+  for (let j = b0; j <= b1; j++) for (let i = a0; i <= a1; i++) {
     const x = GX0 + (i + 0.5) * GC, d = GD0 + (j + 0.5) * GC;
     const rho2 = ((x - cx) ** 2 + (d - cd) ** 2) / (rad * rad);
     if (rho2 > 1) continue;
@@ -545,18 +555,48 @@ for (const o of world.objects) {
   }
   if (tree) {  // the trunk: an opaque column under the crown
     const ti = Math.floor((cx - GX0) / GC), tj = Math.floor((cd - GD0) / GC);
-    if (ti >= 0 && tj >= 0 && ti < GNX && tj < GND) {
+    if (ti >= i0 && tj >= j0 && ti <= i1 && tj <= j1) {
       const k = (tj * GNX + ti) * 4;
       grid[k + 3] = Math.max(grid[k + 3], Math.min(0.5 + v.height * 0.06, 2.5));
       if (grid[k] > 900) { grid[k] = c.hb; grid[k + 1] = c.hb; }
     }
   }
 }
-for (let i = 0; i < GNX * GND; i++) if (grid[i * 4] > 900) { grid[i * 4] = 0; grid[i * 4 + 1] = -1; }
+function finishCells(i0, i1, j0, j1) {
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const k = (j * GNX + i) * 4; if (grid[k] > 900) { grid[k] = 0; grid[k + 1] = -1; } }
+}
+clearCells(0, GNX - 1, 0, GND - 1);
+for (const o of world.objects) stamp(o, 0, GNX - 1, 0, GND - 1);
+finishCells(0, GNX - 1, 0, GND - 1);
 const gridT = texture(GNX, GND, gl.RGBA32F, gl.RGBA, gl.FLOAT, grid);
+// re-stamp the cells around one object (a spent rock or log leaves the volume, and comes back)
+function restampAround(o) {
+  const g = gridShape(o); if (!g) return;
+  const r = g.rad + 0.5;
+  const i0 = Math.max(0, Math.floor((o.x - r - GX0) / GC)), i1 = Math.min(GNX - 1, Math.ceil((o.x + r - GX0) / GC));
+  const j0 = Math.max(0, Math.floor((o.d - r - GD0) / GC)), j1 = Math.min(GND - 1, Math.ceil((o.d + r - GD0) / GC));
+  clearCells(i0, i1, j0, j1);
+  for (const q of objects) {
+    if (q.hidden || Math.abs(q.x - o.x) > 30 || Math.abs(q.d - o.d) > 30) continue;
+    stamp(q, i0, i1, j0, j1);
+  }
+  finishCells(i0, i1, j0, j1);
+  const w = i1 - i0 + 1, h = j1 - j0 + 1, sub = new Float32Array(w * h * 4);
+  for (let j = 0; j < h; j++) sub.set(grid.subarray(((j0 + j) * GNX + i0) * 4, ((j0 + j) * GNX + i1 + 1) * 4), j * w * 4);
+  gl.bindTexture(gl.TEXTURE_2D, gridT);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, i0, j0, w, h, gl.RGBA, gl.FLOAT, sub);
+}
 
 // ---------------------------------------------------------------- sprites (lazy loaded)
-const objects = world.objects.map((o, i) => ({ ...o, id: i + 1, phase: (o.x * 0.137 + o.d * 0.05) % 6.283 }));
+const regionAt = x => world.regions.find(r => x >= r.x0 && x < r.x1) || (x < 0 ? world.regions[0] : world.regions[world.regions.length - 1]);
+const objects = world.objects.map((o, i) => {
+  const v = catalog.variants[o.v];
+  const species = v ? v.species : "";
+  const region = regionAt(o.x).name;
+  return { ...o, id: i + 1, phase: (o.x * 0.137 + o.d * 0.05) % 6.283, species, region,
+           node: LWData.nodeFor(species, region), key: `${o.v}@${o.x.toFixed(1)},${o.d.toFixed(1)}`, hidden: false };
+});
+const nodeObjects = objects.filter(o => o.node && o.x > -2 && o.x < LEN + 2 && o.d > PATH[0] - 4.5 && o.d < PATH[1] + 4.5);
 const sprites = new Map();   // file -> {tex, meta, state}
 function spriteFor(o) {
   const v = catalog.variants[o.v];
@@ -612,99 +652,157 @@ function screenRect(o, s, camX) {
   return [x0 - pad, y0, x0 + m.w + pad, y0 + m.h + 2, x0];
 }
 
-// ---------------------------------------------------------------- the player (a hooded traveller)
-// A small pixel figure, generated here: albedo, normals from its rounded silhouette, a thin slab.
-const PLAYER_PPM = F / 14.0;
-const PW = 14, PH = 24;
-const FRAMES = 6;   // idle, walk x4, jump
-function makePlayerTexture() {
-  // rows top -> bottom; c cloak, h hood, s skin, b belt, l legs, k boots, p pack, x lantern handle
-  const body = [
-    "......hhh.....",
-    ".....hhhhh....",
-    "....hhhhhhh...",
-    "....hhssshh...",
-    "....hhsssh....",
-    ".....hhhh.....",
-    "....cccccc....",
-    "...cccccccc...",
-    "..pcccccccc...",
-    "..pccccccccc..",
-    "..pccccccccc..",
-    "..pcccbbcccc..",
-    "...ccccccccc..",
-    "...ccccccccc..",
-    "...cccccccc...",
-    "...cccccccc...",
-    "....cccccc....",
-  ];
-  const legs = [
-    ["....ll..ll....", "....ll..ll....", "....ll..ll....", "....ll..ll....", "....ll..ll....", "...kkk..kkk...", "..............".slice(0)],
-    ["....ll...ll...", "....ll...ll...", "...ll....ll...", "...ll.....ll..", "..kkk.....kkk.", "..............", ".............."],
-    ["....ll..ll....", "....ll..ll....", ".....ll.ll....", ".....llll.....", "....kkkkk.....", "..............", ".............."],
-    ["...ll...ll....", "...ll...ll....", "...ll....ll...", "..ll.....ll...", ".kkk.....kkk..", "..............", ".............."],
-    ["....ll..ll....", "....ll..ll....", "....ll.ll.....", ".....llll.....", ".....kkkkk....", "..............", ".............."],
-    ["....ll..ll....", "...ll....ll...", "..kkk....kkk..", "..............", "..............", "..............", ".............."],
-  ];
-  const col = { h: [0.18, 0.06, 0.05], c: [0.22, 0.075, 0.055], s: [0.55, 0.38, 0.28], b: [0.25, 0.17, 0.06], l: [0.08, 0.07, 0.07],
-                k: [0.06, 0.04, 0.03], p: [0.2, 0.14, 0.07] };
-  const W = PW * FRAMES, H = PH;
-  const data = new Uint8Array(W * 4 * H * 4);  // 4 maps side by side
-  for (let fi = 0; fi < FRAMES; fi++) {
-    const rows = body.concat(legs[fi]);
-    const pad = PH - rows.length;
-    const mask = [];
-    for (let y = 0; y < PH; y++) { mask.push([]); for (let x = 0; x < PW; x++) {
-      const r = rows[y - pad]; const ch = r ? r[x] : ".";
-      mask[y].push(ch && ch !== "." ? ch : null);
-    } }
-    for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
-      const ch = mask[y][x]; if (!ch) continue;
-      // normal: from distance to the silhouette edge (a rounded body)
-      let nx = 0, ny = 0;
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-        const q = mask[y + dy] && mask[y + dy][x + dx];
-        if (!q) { nx -= dx; ny += dy; }
-      }
-      let nz = 3.0; const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l;
-      const c = col[ch];
-      const px = fi * PW + x;
-      const put = (map, v) => { const k = (y * W * 4 + map * W + px) * 4; for (let i = 0; i < 4; i++) data[k + i] = Math.round(Math.max(0, Math.min(1, v[i])) * 255); };
-      const tex = ch === "c" || ch === "h" ? ((x * 7 + y * 3) % 5 === 0 ? 0.85 : 1.0) : 1.0;
-      put(0, [Math.pow(c[0] * tex, 1 / 2.2), Math.pow(c[1] * tex, 1 / 2.2), Math.pow(c[2] * tex, 1 / 2.2), 1]);
-      put(1, [nx * 0.5 + 0.5, ny * 0.5 + 0.5, nz * 0.5 + 0.5, 1]);
-      put(2, [0.5 + 0.18, 0.5 - 0.18, 1, 0.9]);
-      put(3, [1, 0, 0, 1]);
-    }
-  }
-  return texture(W * 4, H, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, data);
+// ---------------------------------------------------------------- the player: a paper-doll character
+const C = LWCharacter;
+const PW = C.FW, PH = C.FH, FRAMES = C.FRAMES;
+let playerTex = null, playerKey = "";
+function rebuildPlayer(force) {
+  const look = ch ? ch.look : C.DEFAULT_LOOK, equip = ch ? ch.equip : {};
+  const key = JSON.stringify([look, equip.main, equip.off]);
+  if (!force && key === playerKey && playerTex) return;
+  playerKey = key;
+  const b = C.build(look, equip);
+  if (playerTex) gl.deleteTexture(playerTex);
+  playerTex = texture(b.width, b.height, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, b.data);
 }
-// the texture holds FRAMES frames in each map; the sprite shader indexes maps by u_size.x, so the
-// player is drawn as a W = PW*FRAMES sprite clipped to one frame (see drawPlayer)
-const playerTex = makePlayerTexture();
+
+// ---------------------------------------------------------------- the character (game state)
+const SAVE_KEY = "lanternwood.save.v1";
+let ch = null;
+try { const raw = localStorage.getItem(SAVE_KEY); if (raw) ch = LWState.load(raw); } catch (e) { ch = null; }
+const listeners = [];
+function emit(events) { for (const f of listeners) try { f(events); } catch (e) { console.error(e); } }
+function save() { if (!ch) return; ch.pos = { x: +st.x.toFixed(2), d: +st.d.toFixed(2) }; ch.time = +st.time.toFixed(3); try { localStorage.setItem(SAVE_KEY, JSON.stringify(ch)); } catch (e) { /* private mode */ } }
+// every change to the character goes through LWState.act (the same rules a server will run)
+function dispatch(cmd) {
+  if (!ch) return [];
+  const ev = LWState.act(ch, cmd, { now: Date.now() });
+  for (const e of ev) {
+    if (e.t === "spent" && e.hide) { const o = objects.find(q => q.key === e.key); if (o) { o.hidden = true; restampAround(o); } }
+    if (e.t === "equipped" || e.t === "unequipped") rebuildPlayer();
+  }
+  emit(ev); save();
+  return ev;
+}
+// spent nodes from the save are hidden until they regrow
+function syncNodes() {
+  if (!ch) return;
+  const now = Date.now();
+  for (const o of nodeObjects) {
+    const s = ch.nodes[o.key];
+    if (s && s.readyAt && now >= s.readyAt) delete ch.nodes[o.key];
+    const t = ch.nodes[o.key];
+    const hide = !!(t && t.readyAt && o.node.deplete);
+    if (hide !== o.hidden) { o.hidden = hide; restampAround(o); }
+  }
+}
 
 // ---------------------------------------------------------------- state, input
 const st = {
   x: 6, d: 14, h: 0, vx: 0, vh: 0, facing: 1, onGround: true, walkT: 0,
   camX: 6, time: 8.5, flow: true, region: -1, toastT: 0,
+  action: null, target: null, animT: 0, moved: 0, jumps: 0, saveT: 0, cycle: 0, choices: 0,
+};
+if (ch) { st.x = ch.pos.x; st.d = ch.pos.d; st.camX = st.x + 3; st.time = ch.time; syncNodes(); }
+rebuildPlayer(true);
+// the game, as seen by the interface (rpg-ui.js)
+window.Game = {
+  character: () => ch,
+  hasCharacter: () => !!ch,
+  create(name, look) {
+    ch = LWState.newCharacter(name, look, Date.now());
+    ch.pos = { x: st.x, d: st.d }; ch.time = st.time;
+    rebuildPlayer(true); save(); emit([{ t: "created" }]);
+  },
+  setLook(look) { if (!ch) return; ch.look = look; rebuildPlayer(); save(); emit([{ t: "look" }]); },
+  dispatch,
+  craft(id) {
+    const r = LWData.RECIPES.find(x => x.id === id);
+    if (!ch || !r) return;
+    if (st.action) { emit([{ t: "error", why: "You're busy" }]); return; }
+    const c = LWState.canCraft(ch, r);
+    if (!c.ok) { emit([{ t: "error", why: c.why }]); return; }
+    st.action = { kind: "craft", recipe: r, t: 0, dur: r.time, anim: "craft" };
+    emit([{ t: "start", kind: "craft", id, dur: r.time }]);
+  },
+  interact: () => interact(),
+  nextTarget() { st.cycle++; },
+  action: () => st.action && { kind: st.action.kind, progress: Math.min(1, st.action.t / st.action.dur), id: st.action.recipe && st.action.recipe.id },
+  on(f) { listeners.push(f); },
+  reset() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ } location.reload(); },
 };
 UI.bind({
   getTime: () => st.time, setTime: t => { st.time = ((t % 24) + 24) % 24; },
   getFlow: () => st.flow, setFlow: f => { st.flow = f; },
   setQuality: q => { try { P.light = program(lightSource(QUALITY[q] || QUALITY.high)); } catch (e) { console.error(e); } },
 });
+// gatherable nodes in reach, best first: side-to-side distance matters most (you stand at a tree's
+// trunk, beside a plant), depth less; Tab cycles through the rest
+function candidates() {
+  const out = [];
+  for (const o of nodeObjects) {
+    if (o.hidden) continue;
+    const dx = o.x - st.x, dd = o.d - st.d;
+    const tree = !o.node.deplete;
+    const rx = tree ? 1.8 : 1.3, rd = tree ? 4.2 : 3.0;
+    if (Math.abs(dx) > rx || Math.abs(dd) > rd) continue;
+    const ex = Math.max(0, Math.abs(dx) - (tree ? 0.7 : 0));
+    out.push([ex * 1.6 + Math.abs(dd) * 0.3 - (Math.sign(dx) === st.facing ? 0.2 : 0), o]);
+  }
+  out.sort((a, b) => a[0] - b[0]);
+  return out.map(c => c[1]);
+}
+function findTarget() {
+  const list = candidates();
+  st.choices = list.length;
+  if (!list.length) { st.cycle = 0; return null; }
+  return list[st.cycle % list.length];
+}
+function interact() {
+  if (!ch || st.action || !st.onGround) return;
+  const o = st.target;
+  if (!o) return;
+  const node = o.node, lvl = LWState.level(ch, node.skill);
+  if (lvl < node.req) { emit([{ t: "error", why: `Needs ${LWData.SKILLS[node.skill].name} ${node.req}` }]); return; }
+  const ns = LWState.nodeState(ch, o.key, node, Date.now());
+  if (!ns.ready) { emit([{ t: "error", why: node.deplete ? "It needs time to grow back" : "This tree needs rest" }]); return; }
+  st.facing = o.x >= st.x ? 1 : -1;
+  const anim = node.skill === "forestry" ? (node.deplete && o.species.startsWith("Shrub") ? "gather" : "chop") : node.skill === "stonecutting" ? "mine" : "gather";
+  const dur = LWState.gatherTime(ch, node);
+  st.action = { kind: "gather", o, t: 0, dur, anim };
+  emit([{ t: "start", kind: "gather", dur }]);
+}
 function update(dt) {
-  const inp = UI.started ? UI.input : { ax: 0, ad: 0, jump: false, run: false };
+  const inp = UI.started && ch ? UI.input : { ax: 0, ad: 0, jump: false, run: false };
+  const bonus = ch ? LWState.agilityBonus(ch) : 1;
   const run = inp.run ? 1.9 : 1.0;
-  const ax = inp.ax, ad = inp.ad;
-  st.vx += (ax * 3.4 * run - st.vx) * Math.min(1, dt * 10);
+  // moving or jumping ends an action
+  if (st.action && (Math.abs(inp.ax) > 0.3 || Math.abs(inp.ad) > 0.3 || inp.jump)) { st.action = null; emit([{ t: "cancel" }]); }
+  const ax = st.action ? 0 : inp.ax, ad = st.action ? 0 : inp.ad;
+  st.vx += (ax * 3.4 * run * bonus - st.vx) * Math.min(1, dt * 10);
+  const x0 = st.x, d0 = st.d;
   st.x = Math.max(1, Math.min(LEN - 1, st.x + st.vx * dt));
-  st.d = Math.max(PATH[0] + 0.2, Math.min(PATH[1] - 0.2, st.d + ad * 2.2 * run * dt));
+  st.d = Math.max(PATH[0] + 0.2, Math.min(PATH[1] - 0.2, st.d + ad * 2.2 * run * bonus * dt));
   if (ax) st.facing = Math.sign(ax);
-  if (st.onGround && inp.jump) { st.vh = 5.2; st.onGround = false; }
+  if (st.onGround && inp.jump && !st.action) { st.vh = 5.2; st.onGround = false; st.jumps++; }
   st.vh -= 15 * dt; st.h += st.vh * dt;
   if (st.h <= 0) { st.h = 0; st.vh = 0; st.onGround = true; }
   st.walkT += Math.abs(st.vx) * dt * 2.2;
+  if (Math.abs(st.vx) > 0.5 || ad) st.cycle = 0;
+  st.moved += Math.hypot(st.x - x0, st.d - d0) * (inp.run ? 1.5 : 1);
+  if (ch && (st.moved >= 16 || st.jumps >= 3)) { dispatch({ t: "move", metres: st.moved, jumps: st.jumps }); st.moved = 0; st.jumps = 0; }
+  // the action in progress
+  st.animT += dt;
+  if (st.action) {
+    const a = st.action;
+    a.t += dt;
+    if (a.t >= a.dur) {
+      st.action = null;
+      if (a.kind === "gather") dispatch({ t: "gather", key: a.o.key, species: a.o.species, region: a.o.region });
+      else if (a.kind === "craft") dispatch({ t: "craft", id: a.recipe.id });
+    }
+  }
+  st.target = !ch ? null : st.action ? (st.action.o || null) : findTarget();
   // camera: leads the player a little in the walking direction
   const want = st.x + st.facing * 3.0;
   st.camX += (want - st.camX) * Math.min(1, dt * 2.5);
@@ -715,8 +813,39 @@ function update(dt) {
     st.region = ri;
     UI.setRegion(world.regions[ri].name, ["the old road", "under the beeches", "where the birches drink", "the high spruce", "the burnt ridge", "the sunlit terraces"][ri] || "");
   }
+  // regrowth, and saving now and then
+  st.saveT += dt;
+  if (st.saveT > 4) { st.saveT = 0; syncNodes(); save(); }
 }
-
+function playerFrame() {
+  let anim = "idle";
+  if (st.action) anim = st.action.anim;
+  else if (!st.onGround) anim = st.vh > 0 ? "jumpUp" : "jumpFall";
+  else if (Math.abs(st.vx) > 4.6) anim = "run";
+  else if (Math.abs(st.vx) > 0.3) anim = "walk";
+  const [f0, n, fps] = C.ANIMS[anim];
+  const phase = anim === "walk" || anim === "run" ? st.walkT * (anim === "run" ? 0.9 : 1.4) : st.animT * fps;
+  return f0 + (Math.floor(phase) % n + n) % n;
+}
+// where the interface should show the prompt for the current target (CSS pixels), if any
+function promptInfo() {
+  const o = st.target;
+  if (!o || !ch) return null;
+  const v = catalog.variants[o.v];
+  const ppm = F / o.d;
+  const top = Math.min(v ? v.height : 1, o.node.deplete ? 2.2 : 3.4);
+  const vx = VW / 2 + (o.x - st.camX) * ppm, vy = HOR + (top + 0.4 - HC) * ppm;
+  const dpr = devicePixelRatio || 1, offX = Math.floor((canvas.width - VW * st.scale) / 2), offY = Math.floor((canvas.height - VH * st.scale) / 2);
+  const node = o.node, lvl = LWState.level(ch, node.skill);
+  const ns = LWState.nodeState(ch, o.key, node, Date.now());
+  const items = node.yields.map(y => LWData.ITEMS[y[0]].name);
+  return {
+    x: (offX + vx * st.scale) / dpr, y: (canvas.height - offY - Math.min(vy, VH - 8) * st.scale) / dpr,
+    verb: LWData.SKILLS[node.skill].verb, name: items[0], skill: node.skill, req: node.req, level: lvl,
+    ok: lvl >= node.req && ns.ready, resting: !ns.ready, progress: st.action && st.action.o === o ? st.action.t / st.action.dur : -1,
+    more: !st.action && st.choices > 1,
+  };
+}
 // ---------------------------------------------------------------- time of day
 const mix3 = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
 const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -821,9 +950,8 @@ function frameBody(now) {
     playerDrawn = true;
     const ppm = F / st.d;
     const sx = VW / 2 + (st.x - camX) * ppm, sy = HOR + (st.h - HC) * ppm;
-    const moving = Math.abs(st.vx) > 0.3;
-    const fi = !st.onGround ? 5 : moving ? 1 + (Math.floor(st.walkT * 2) % 4) : 0;
-    const x0 = Math.round(sx - PW / 2), y0 = Math.round(sy);
+    const fi = playerFrame();
+    const x0 = Math.round(sx - PW / 2), y0 = Math.round(sy) - 1;
     // the whole strip is one sprite PW*FRAMES wide; shift it so frame fi lands on x0
     const ox = x0 - fi * PW;
     gl.uniform4f(U.u_rect, x0, y0, x0 + PW, y0 + PH);
@@ -842,6 +970,7 @@ function frameBody(now) {
   };
   for (const o of objects) {
     if (!playerDrawn && o.d < st.d) drawPlayer();
+    if (o.hidden) continue;
     const s = spriteFor(o);
     if (!s) continue;
     const r = screenRect(o, s, camX);
@@ -904,7 +1033,7 @@ function frameBody(now) {
   const S = P.style.u;
   gl.uniform1f(S.u_camX, camX); gl.uniform1i(S.u_bands, +$("bands").value); gl.uniform1i(S.u_look, +$("look").value);
   gl.uniform1i(S.u_clean, $("clean").checked); gl.uniform1i(S.u_outline, $("outline").checked);
-  gl.uniform1f(S.u_expo, sun.expo); gl.uniform1f(S.u_haze, +$("haze").value / 100); gl.uniform1f(S.u_time, t); gl.uniform1f(S.u_night, sun.night);
+  gl.uniform1f(S.u_hl, st.target && UI.started ? st.target.id : -5); gl.uniform1f(S.u_expo, sun.expo); gl.uniform1f(S.u_haze, +$("haze").value / 100); gl.uniform1f(S.u_time, t); gl.uniform1f(S.u_night, sun.night);
   const srgb = c => c.map(v => Math.pow(Math.max(0, Math.min(1, v)), 1 / 2.2));
   gl.uniform3fv(S.u_skyTop, srgb(sun.skyTop)); gl.uniform3fv(S.u_skyHor, srgb(sun.skyHor)); gl.uniform3fv(S.u_hazeCol, srgb(sun.hazeCol));
   gl.uniform3fv(S.u_sunDir, sun.dir); gl.uniform3fv(S.u_sunCol, sun.col.map(v => v / 2.8)); gl.uniform3fv(S.u_mtn, srgb(sun.mtn));
@@ -941,8 +1070,9 @@ function frameBody(now) {
     const name = window.__grab; window.__grab = null;
     canvas.toBlob(b => fetch("/save?name=" + name, { method: "POST", body: b }), "image/png");
   }
-  // HUD clock + loading screen
+  // HUD clock, prompt + loading screen
   UI.setClock(st.time, st.flow);
+  if (window.RPGUI) RPGUI.frame(promptInfo());
   if (!loadedOnce) {
     const total = drawn + waiting;
     UI.setProgress(0.6 + (total ? 0.4 * drawn / total : 0));
@@ -964,7 +1094,7 @@ window.__bench = (n = 20) => {
   benching = false; requestAnimationFrame(frame);
   return ms;
 };
-window.__st = st;
+window.__st = st; window.__nodes = nodeObjects;   // debugging and automated play-tests
 requestAnimationFrame(frame);
 } catch (e) { fail(e); }
 })();

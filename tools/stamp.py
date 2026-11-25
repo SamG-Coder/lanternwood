@@ -11,7 +11,7 @@ import hashlib, json, os, re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS = os.path.join(ROOT, "docs")
-FILES = ["js/ui.js", "js/rtpack.js", "js/game.js", "js/decoder.js", "data/world.rtp"]
+FILES = sorted("js/" + f for f in os.listdir(os.path.join(DOCS, "js")) if f.endswith(".js")) + ["data/world.rtp"]
 
 
 def h(path):
@@ -23,7 +23,9 @@ def main():
     vers = {p: h(p) for p in FILES}
     p = os.path.join(DOCS, "index.html")
     s = open(p, encoding="utf-8").read()
-    for f in ("js/ui.js", "js/rtpack.js", "js/game.js"):
+    for f in FILES:
+        if not f.endswith(".js"):
+            continue
         s = re.sub(r'src="%s(\?v=[0-9a-f]*)?"' % re.escape(f), 'src="%s?v=%s"' % (f, vers[f]), s)
     s = re.sub(r"<script>window\.LW_V = .*?</script>\n?", "", s)
     s = s.replace('<script src="js/ui.js', "<script>window.LW_V = %s;</script>\n<script src=\"js/ui.js" % json.dumps(vers, separators=(",", ":")), 1)

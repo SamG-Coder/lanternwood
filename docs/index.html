@@ -25,7 +25,7 @@
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; height: 100%; background: #07080c; color: var(--ink); font: 13px/1.45 var(--sans); overflow: hidden;
                overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  canvas { position: fixed; inset: 0; display: block; outline: none; touch-action: none; }
+  #c { position: fixed; inset: 0; display: block; outline: none; touch-action: none; }
   button { font: inherit; color: inherit; }
 
   /* ---------- glass */
@@ -159,13 +159,13 @@
                  border: 1.5px dashed rgba(241,234,216,.3); display: none; place-items: center; color: rgba(241,234,216,.55); font-size: 10px;
                  letter-spacing: .14em; text-transform: uppercase; pointer-events: none; }
   .is-mobile.is-playing.hints .stick-ghost { display: grid; }
-  .is-mobile.is-playing #touch-buttons { display: block; position: fixed; z-index: 3; right: calc(24px + var(--sa-r)); bottom: calc(24px + var(--sa-b)); width: 170px; height: 150px; }
+  .is-mobile.is-playing #touch-buttons { display: block; position: fixed; z-index: 3; right: calc(24px + var(--sa-r)); bottom: calc(24px + var(--sa-b)); width: 190px; height: 160px; }
   .tbtn { position: absolute; border-radius: 50%; display: grid; place-items: center; touch-action: none; cursor: pointer; padding: 0;
           border: 1.5px solid rgba(241,234,216,.32); background: rgba(14,15,20,.42); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
           color: var(--ink); font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; transition: transform .08s, background .15s; }
   .tbtn svg { width: 26px; height: 26px; fill: none; stroke: var(--ink); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   #t-jump { right: 0; bottom: 0; width: 84px; height: 84px; }
-  #t-run { left: 0; bottom: 58px; width: 60px; height: 60px; }
+  #t-run { right: 12px; bottom: 98px; width: 58px; height: 58px; }
   .tbtn.down { transform: scale(.92); background: rgba(217,181,106,.3); }
   #t-run.on { background: rgba(217,181,106,.32); border-color: rgba(217,181,106,.7); }
 
@@ -216,7 +216,8 @@
   <div class="hint"><kbd>W</kbd><kbd>S</kbd> Along the trail</div>
   <div class="hint"><kbd>Space</kbd> Jump</div>
   <div class="hint"><kbd>Shift</kbd> Run</div>
-  <div class="hint"><kbd>H</kbd> Settings</div>
+  <div class="hint"><kbd>E</kbd> Gather</div>
+  <div class="hint"><kbd>I</kbd> Journal</div>
 </div>
 <div id="region-card"><div class="rc-name"></div><div class="rc-rule"></div><div class="rc-sub"></div></div>
 <div id="notice">
@@ -269,6 +270,8 @@
         <span><kbd>W</kbd> <kbd>S</kbd></span><span>Move along the trail</span>
         <span><kbd>Space</kbd></span><span>Jump</span>
         <span><kbd>Shift</kbd></span><span>Run</span>
+        <span><kbd>E</kbd></span><span>Gather from the plant, log or rock in reach</span>
+        <span><kbd>I</kbd> <kbd>K</kbd> <kbd>C</kbd></span><span>Bag, character, crafting</span>
         <span><kbd>[</kbd> <kbd>]</kbd></span><span>An hour back / forward</span>
         <span><kbd>T</kbd></span><span>Pause or resume time</span>
         <span><kbd>F</kbd></span><span>Fullscreen</span>
@@ -313,9 +316,13 @@
   <div id="load-err"></div>
 </div></div>
 
-<script>window.LW_V = {"js/ui.js":"568db6b3f0","js/rtpack.js":"cdc5e62e10","js/game.js":"d7957a58a9","js/decoder.js":"cd2f985641","data/world.rtp":"472e8ff9c9"};</script>
-<script src="js/ui.js?v=568db6b3f0"></script>
+<script>window.LW_V = {"js/character.js":"97644176ed","js/data.js":"a332a1cc3c","js/decoder.js":"cd2f985641","js/game.js":"0cede8f817","js/rpg-ui.js":"f31549e94a","js/rtpack.js":"cdc5e62e10","js/state.js":"963f23f378","js/ui.js":"d58393b825","data/world.rtp":"108286b1d7"};</script>
+<script src="js/ui.js?v=d58393b825"></script>
+<script src="js/data.js?v=a332a1cc3c"></script>
+<script src="js/state.js?v=963f23f378"></script>
+<script src="js/character.js?v=97644176ed"></script>
+<script src="js/rpg-ui.js?v=f31549e94a"></script>
 <script src="js/rtpack.js?v=cdc5e62e10"></script>
-<script src="js/game.js?v=d7957a58a9"></script>
+<script src="js/game.js?v=0cede8f817"></script>
 </body>
 </html>

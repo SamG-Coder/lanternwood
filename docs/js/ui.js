@@ -158,6 +158,8 @@ function keyInput() {
   UI.input.run = K("shift");
 }
 addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" && e.target.type === "text") return;   // typing a name
+  if (root.classList.contains("creating")) return;
   const k = e.key.toLowerCase();
   if (e.target.tagName === "INPUT" && e.target.type === "range" && k.startsWith("arrow")) return;
   if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();

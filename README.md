@@ -26,14 +26,46 @@ own 3D shape, so the light falls on it the way it would on the real thing.
 | **[ / ]** | Time of day back / forward |
 | **T** | Pause or resume time |
 | **F** | Fullscreen |
+| **E** | Gather from the plant, log or rock in reach (**Tab** picks another) |
+| **I / K / C** | Journal: bag, character and skills, crafting |
 | **H** | Settings: time of day, look, depth of field, bloom, haze, wind, light quality |
 
 **On a phone or tablet:** turn it sideways, then tap *Begin the walk*. The game goes fullscreen
 and locks to landscape where the browser allows it. Drag anywhere on the left half to walk
-(push to the edge to run). Use **⤒** to jump and **Run** to toggle running. Touch devices
+(push to the edge to run). Use **⤒** to jump, **Run** to toggle running and **Gather** when a plant or rock is in reach
+(tap the prompt to pick another). Touch devices
 start on *Balanced* light quality, which shortens the traced rays.
 
 Needs a browser with WebGL2: any current desktop or mobile browser.
+
+## The RPG
+
+- **Classless.** There's no class to pick. You become what you practise: every skill levels from
+  use, up to 50, and your total level is the sum of them all. What you carry (staff, bow, maul,
+  buckler) decides how you play.
+- **Professions:**
+
+  | Gathering | Crafting |
+  |---|---|
+  | Herbalism | Alchemy |
+  | Forestry | Woodworking |
+  | Stonecutting | Masonry |
+
+  Agility trains as you walk, run and jump.
+- **The world is the resource map.** The poppies, bilberries, ferns, heather, fallen logs, trees
+  and boulders along the trail are gathering nodes: 11 herbs, 18 woods and 2 stones. Spent plants
+  and rocks vanish and grow back, and their traced shadows go with them. Trees need rest between
+  harvests. The southern boulders are sandstone.
+- **Crafting:** 20 recipes, including potions, bows, staves, a buckler, a maul, a waystone
+  trinket, and better tools that gather faster.
+- **Your character:** made in a character creator (build, skin, hair, clothes, cloak), drawn as a
+  procedural pixel paper-doll. It's lit by the same traced light as the forest, with idle, walk,
+  run, jump, gather, chop, quarry and craft animations. Gear you equip shows on the sprite.
+- **Saves** in your browser.
+- **Ready for multiplayer.** Every change to a character goes through one function,
+  [`docs/js/state.js`](docs/js/state.js) `act()`. It has no DOM and runs in Node
+  (`node tools/test_state.js`), so a future MMO gateway can run the same rules as the authority,
+  with [asm-mmo-server](https://github.com/SamG-Coder/asm-mmo-server) handling movement and visibility.
 
 ## What makes it different
 

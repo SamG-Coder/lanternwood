@@ -169,6 +169,34 @@ def generate(avail, seed=7):
                     occupied.append((x, d, 0.8))
                     add(v, x, d, "rock")
 
+    # trailside resources: every region gets trees, fallen logs and boulders within reach of the
+    # trail (gathering nodes for Forestry and Stonecutting), on both sides of it
+    trail_res = {
+        "Hearthmeadow": (["Tree_Common_Hazel", "Tree_Elder", "Tree_European_Aspen", "Tree_Black_Alder"], ["Prop_Boulders", "Prop_Logs"]),
+        "Beechwood Hollow": (["Tree_European_Beech", "Tree_English_Oak", "Tree_Norway_Maple", "Tree_Common_Hazel", "Tree_Black_Alder"], ["Prop_Logs", "Prop_Boulders", "Prop_Logs"]),
+        "Birchwater Glade": (["Tree_Silver_Birch", "Tree_Goat_Willow", "Tree_Black_Alder", "Tree_European_Aspen"], ["Prop_Logs", "Prop_Boulders"]),
+        "Spruce Heights": (["Tree_Norway_Spruce", "Tree_Baltic_Pine", "Tree_Rowan", "Tree_Silver_Birch"], ["Prop_Boulders", "Prop_Boulders", "Prop_Logs"]),
+        "Ashen Ridge": (["Tree_Dead_Pine", "Tree_Baltic_Pine"], ["Prop_Snags", "Prop_Boulders", "Prop_Logs"]),
+        "Sunterrace Pines": (["Tree_Aleppo_Pine", "Tree_Common_Hazel"], ["Prop_Boulders", "Prop_Boulders"]),
+    }
+    x = 8.0
+    while x < LENGTH - 6:
+        reg = region_at(rng, x)
+        trees, props = trail_res[reg["name"]]
+        if rng.random() < 0.65:   # a tree just behind or in front of the trail
+            far = rng.random() < 0.7
+            d = rng.uniform(PATH[1] + 0.9, PATH[1] + 2.8) if far else rng.uniform(PATH[0] - 2.4, PATH[0] - 1.0)
+            v = pick({t: 1 for t in trees}, max_h=None if far else 9.0)
+            if v and free(x, d, 0.8):
+                occupied.append((x, d, 0.8)); add(v, x, d, "tree")
+        if rng.random() < 0.5:    # a log or a boulder
+            d = rng.uniform(PATH[1] + 0.6, PATH[1] + 2.2) if rng.random() < 0.6 else rng.uniform(PATH[0] - 1.8, PATH[0] - 0.6)
+            v = pick({t: 1 for t in props})
+            xx = x + rng.uniform(3, 6)
+            if v and free(xx, d, 0.6):
+                occupied.append((xx, d, 0.6)); add(v, xx, d, "rock")
+        x += rng.uniform(7, 12)
+
     objects.sort(key=lambda o: (-o["d"], o["x"]))  # far first
     regions = [dict(name=r["name"], x0=max(r["x0"], 0.0) if i == 0 else r["x0"], x1=min(r["x1"], LENGTH),
                     ground=r["ground"], fireflies=r["fireflies"]) for i, r in enumerate(REGIONS)]
