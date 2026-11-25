@@ -252,6 +252,7 @@ def main():
         json.dump(index, fh)
     import subprocess
     subprocess.run(["node", os.path.join(ROOT, "tools", "pack.mjs"), a.out, a.pack], check=True)
+    subprocess.run([sys.executable, os.path.join(ROOT, "tools", "stamp.py")], check=True)   # fresh URLs for the new pack
 
 
 if __name__ == "__main__":

@@ -7,6 +7,14 @@
 "use strict";
 
 const $ = id => document.getElementById(id);
+// tolerate an interface script from an older deploy (cached): every hook the game calls exists
+window.UI = window.UI || { input: { ax: 0, ad: 0, jump: false, run: false }, started: true, mobile: false, quality: "high" };
+for (const k of ["setStage", "setProgress", "setRegion", "setClock", "ready", "bind"]) if (typeof UI[k] !== "function") UI[k] = () => {};
+if (typeof UI.error !== "function") UI.error = m => { const e = $("load-err") || $("err"); if (e) e.textContent = m; };
+if (!UI.input) UI.input = { ax: 0, ad: 0, jump: false, run: false };
+// versioned URLs (tools/stamp.py): never mix a cached old file with this deploy
+const LV = window.LW_V || {};
+const vurl = (path, key) => LV[key || path] ? `${path}?v=${LV[key || path]}` : path;
 function fail(e) { console.error(e); UI.error(String(e && e.message || e)); }
 
 async function fetchWithProgress(url, onProgress) {
@@ -30,7 +38,7 @@ async function fetchWithProgress(url, onProgress) {
 try {
 // the world ships as one RTPack file (docs/js/rtpack.js): layout, catalog and every sprite
 UI.setStage("Fetching the world");
-const packBuf = await fetchWithProgress("data/world.rtp", f => { UI.setProgress(f * 0.6); UI.setStage(`Fetching the world · ${Math.round(f * 100)}%`); });
+const packBuf = await fetchWithProgress(vurl("data/world.rtp"), f => { UI.setProgress(f * 0.6); UI.setStage(`Fetching the world · ${Math.round(f * 100)}%`); });
 const pack = RTPack.openFile(packBuf);
 const world = pack.meta.world, catalog = pack.meta.catalog;
 UI.setStage("Preparing the light");
@@ -46,7 +54,7 @@ function workerFailed(why) {
 }
 try {
   if (/[?&]noworker/.test(location.search)) throw new Error("disabled by ?noworker");   // debug: test the fallback
-  decoder = new Worker("js/decoder.js");
+  decoder = new Worker(vurl("js/decoder.js") + (LV["js/rtpack.js"] ? `&rt=${LV["js/rtpack.js"]}` : ""));
   decoder.onerror = e => { e.preventDefault && e.preventDefault(); workerFailed(e.message || "worker error"); };
   decoder.onmessageerror = () => workerFailed("message error");
   decoder.onmessage = e => { const job = pending.get(e.data.id); pending.delete(e.data.id); if (job) job.done(e.data); };

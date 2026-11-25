@@ -125,7 +125,9 @@ python tools/bake_world.py
 python tools/devserver.py      # then open http://127.0.0.1:8765/docs/
 ```
 
-Edit `tools/world_gen.py` to change the world, then bake again.
+Edit `tools/world_gen.py` to change the world, then bake again. After changing anything in `docs/`
+by hand, run `python tools/stamp.py` before committing. It puts content hashes on the script, worker
+and pack URLs, so browsers never mix cached old files with a new deploy. The bake runs it for you.
 
 | Path | What it is |
 |---|---|

@@ -183,7 +183,7 @@ const R = () => base.offsetWidth * 0.5;
 zone.addEventListener("pointerdown", e => {
   if (e.pointerType === "mouse" || stick.id !== null) return;
   stick.id = e.pointerId; stick.x0 = e.clientX; stick.y0 = e.clientY;
-  zone.setPointerCapture(e.pointerId);
+  try { zone.setPointerCapture(e.pointerId); } catch (err) { /* some browsers refuse capture; the stick still works */ }
   base.style.left = e.clientX + "px"; base.style.top = e.clientY + "px";
   base.classList.add("on"); moveStick(e);
   touchActive = true;
