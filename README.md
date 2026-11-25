@@ -36,6 +36,14 @@ and locks to landscape where the browser allows it. Drag anywhere on the left ha
 (tap the prompt to pick another). Touch devices
 start on *Balanced* light quality, which shortens the traced rays.
 
+**With a controller** (Xbox, PlayStation or any standard gamepad, on PC or mobile): left stick moves
+(full tilt or **RT** runs), **A** jumps, **X** gathers, **RB** picks another target, **Y** opens the journal,
+**View** the character page, **Start** the settings. Every menu works like a console menu: the D-pad
+or stick moves a gold cursor, **A** selects, **B** goes back, **LB / RB** switch journal tabs,
+**LT / RT** switch crafting professions, the right stick scrolls, and a bar at the bottom shows
+which button does what. Prompts show Xbox or PlayStation buttons to match the controller. The arrow
+keys and Enter move through the menus the same way on a keyboard.
+
 Needs a browser with WebGL2: any current desktop or mobile browser.
 
 ## The RPG

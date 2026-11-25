@@ -61,7 +61,7 @@ const css = `
   border: 1px solid rgba(217,181,106,.55); font: 600 12px var(--sans); color: var(--ink); box-shadow: 0 3px 12px rgba(0,0,0,.35); }
 #rpg-prompt.locked .pp { border-color: rgba(220,120,100,.6); color: #e8b0a0; }
 #rpg-prompt kbd { min-width: 20px; height: 20px; font-size: 10px; }
-#rpg-prompt kbd.tab { opacity: .7; }
+#rpg-prompt .tab { opacity: .7; display: inline-flex; }
 .is-mobile #rpg-prompt { pointer-events: auto; }
 #rpg-prompt .pbar { width: 100%; height: 3px; margin-top: 4px; background: rgba(241,234,216,.18); border-radius: 2px; overflow: hidden; }
 #rpg-prompt .pbar i { display: block; height: 100%; background: var(--gold); width: 0; }
@@ -87,6 +87,8 @@ const css = `
   height: min(520px, calc(100vh - 2 * var(--pad) - var(--sa-t) - var(--sa-b))); display: flex; flex-direction: column; background: var(--glass-2);
   opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s; }
 .journal-open #journal { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%); }
+.legend-on #journal { top: calc(50% - var(--lg) / 2); height: min(520px, calc(100vh - 2 * var(--pad) - var(--sa-t) - var(--sa-b) - var(--lg))); }
+.legend-on #creator { padding-bottom: calc(6px + var(--lg)); }
 .journal-open #scrim { opacity: 1; pointer-events: auto; }
 .j-head { display: flex; align-items: center; gap: 6px; padding: 10px 10px 0 14px; border-bottom: 1px solid var(--line); }
 .j-tab { border: 0; background: transparent; color: var(--ink-3); padding: 10px 14px; cursor: pointer; font: 600 13px var(--serif); letter-spacing: .04em; border-bottom: 2px solid transparent; margin-bottom: -1px; }
@@ -151,6 +153,25 @@ const css = `
 .sw .off { background: transparent; border: 1px dashed var(--ink-3); color: var(--ink-3); font-size: 10px; width: auto; border-radius: 11px; padding: 0 7px; }
 .cr-go { display: flex; gap: 8px; margin-top: 16px; }
 .cr-go .btn { padding: 10px 18px; }
+.cr-main { min-width: 0; }
+/* short screens (phones in landscape): everything on one screen, no scrolling to find Begin */
+@media (max-height: 520px) {
+  #creator { padding: max(6px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); }
+  .cr, .is-mobile .cr { grid-template-columns: auto 1fr; gap: 12px; padding: 10px 14px; width: min(760px, 100%);
+    height: calc(100vh - 12px - var(--lg, 0px)); height: calc(100dvh - 12px - var(--lg, 0px)); max-height: none; overflow: hidden; }
+  .cr-prev { min-height: 0; height: 100%; width: auto; justify-content: center; }
+  .cr-prev canvas { width: auto; height: calc(100% - 34px); max-width: 30vw; aspect-ratio: 240 / 340; }
+  .cr-anim { padding: 4px; gap: 3px; } .cr-anim button { padding: 2px 6px; font-size: 10px; }
+  .cr-main { display: flex; flex-direction: column; min-height: 0; }
+  .cr h2 { font-size: 17px; margin: 0 0 2px; } .cr .sub { font-size: 11px; margin-bottom: 6px; }
+  .cr-name { padding: 5px 10px; font-size: 14px; margin-bottom: 6px; }
+  .cr-rows { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 12px; overflow: auto; min-height: 0; flex: 1; align-content: start; }
+  .cr-row { grid-template-columns: 56px minmax(0, 1fr); gap: 6px; margin: 3px 0; }
+  .cr-row > span { font-size: 11px; }
+  .sw { gap: 2px; } .sw button { width: 17px; height: 17px; flex: none; } .sw .off { padding: 0 5px; }
+  .pick button { width: 24px; height: 24px; font-size: 12px; }
+  .cr-go { margin-top: 6px; } .cr-go .btn { padding: 8px 16px; }
+}
 /* mobile action button */
 #t-act { right: 98px; bottom: 6px; width: 70px; height: 70px; display: none; font-size: 10px; }
 .has-target #t-act { display: grid; }
@@ -294,10 +315,11 @@ function frame(p) {
   if (!p || !UI.started || journalOpen()) { if (lastPrompt) { prompt.style.display = "none"; lastPrompt = ""; } return; }
   const locked = p.level < p.req;
   const label = locked ? `${D.SKILLS[p.skill].name} ${p.req} needed` : p.resting ? "Needs time to regrow" : `${p.verb} · ${p.name}`;
-  const key = label + "|" + locked + "|" + (p.progress >= 0) + "|" + p.more;
+  const key = label + "|" + locked + "|" + (p.progress >= 0) + "|" + p.more + "|" + UI.device;
   if (key !== lastPrompt) {
     prompt.className = locked || p.resting ? "locked" : "";
-    prompt.innerHTML = `<div class="pp">${locked || p.resting ? "" : "<kbd>E</kbd>"}<span>${esc(label)}</span>${p.more ? '<kbd class="tab">Tab</kbd>' : ""}</div>${p.progress >= 0 ? '<div class="pbar"><i></i></div>' : ""}`;
+    const g = a => UI.glyph ? UI.glyph(a) : `<kbd>${a === "next" ? "Tab" : "E"}</kbd>`;
+    prompt.innerHTML = `<div class="pp">${locked || p.resting ? "" : g("interact")}<span>${esc(label)}</span>${p.more ? `<span class="tab">${g("next")}</span>` : ""}</div>${p.progress >= 0 ? '<div class="pbar"><i></i></div>' : ""}`;
     act.textContent = locked || p.resting ? "—" : p.verb;
     lastPrompt = key;
   }
@@ -318,16 +340,16 @@ function openCreator() {
   creator.innerHTML = `<div class="cr glass">
     <div class="cr-prev"><canvas id="cr-canvas" width="240" height="340"></canvas>
       <div class="cr-anim">${["idle", "walk", "run", "chop", "gather"].map(a => `<button data-anim="${a}" class="${a === animName ? "on" : ""}">${a[0].toUpperCase() + a.slice(1)}</button>`).join("")}</div></div>
-    <div><h2>Who walks the road?</h2><div class="sub">No class to choose: you become what you practise.</div>
+    <div class="cr-main"><h2>Who walks the road?</h2><div class="sub">No class to choose: you become what you practise.</div>
       <input class="cr-name" id="cr-name" maxlength="18" placeholder="Name" value="${esc(creator.dataset.name || NAMES[Math.floor(Math.random() * NAMES.length)])}">
-      <div class="cr-row"><span>Build</span>${picker("build", CH.BUILDS)}</div>
+      <div class="cr-rows"><div class="cr-row"><span>Build</span>${picker("build", CH.BUILDS)}</div>
       <div class="cr-row"><span>Skin</span>${swatches("skin", CH.PAL.skin)}</div>
       <div class="cr-row"><span>Hair</span>${picker("hair", CH.HAIR_STYLES)}</div>
       <div class="cr-row"><span>Hair colour</span>${swatches("hairColor", CH.PAL.hair)}</div>
       <div class="cr-row"><span>Tunic</span>${swatches("tunic", CH.PAL.cloth)}</div>
       <div class="cr-row"><span>Trousers</span>${swatches("trousers", CH.PAL.cloth)}</div>
       <div class="cr-row"><span>Cloak</span>${swatches("cloak", CH.PAL.cloth, true)}</div>
-      <div class="cr-row"><span>Boots</span>${swatches("boots", CH.PAL.boots)}</div>
+      <div class="cr-row"><span>Boots</span>${swatches("boots", CH.PAL.boots)}</div></div>
       <div class="cr-go"><button class="btn" id="cr-start">Begin your journey</button><button class="btn ghost" id="cr-rand">Surprise me</button></div>
     </div></div>`;
   creator.querySelector("#cr-name").addEventListener("input", e => { creator.dataset.name = e.target.value; });
@@ -353,7 +375,9 @@ function openCreator() {
       }
       root.classList.remove("creating"); cancelAnimationFrame(crRaf);
       Game.create(name, { ...look });
-      setTimeout(() => toast("<span>Press <b>E</b> by a plant, log or rock to gather · <b>I</b> opens your journal</span>"), 900);
+      setTimeout(() => toast(UI.device === "pad"
+        ? `<span>${UI.btn("x")} by a plant, log or rock to gather · ${UI.btn("y")} opens your journal</span>`
+        : "<span>Press <b>E</b> by a plant, log or rock to gather · <b>I</b> opens your journal</span>"), 900);
       return;
     } else return;
     openCreator();
@@ -389,5 +413,5 @@ function hook() {
   Game.on(onEvents);
 }
 hook();
-window.RPGUI = { frame, openJournal, openCreator, toast };
+window.RPGUI = { frame, openJournal, closeJournal, openCreator, toast, journalTab: () => tab };
 })();

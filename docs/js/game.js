@@ -763,7 +763,7 @@ window.Game = {
   nextTarget() { st.cycle++; },
   action: () => st.action && { kind: st.action.kind, progress: Math.min(1, st.action.t / st.action.dur), id: st.action.recipe && st.action.recipe.id },
   on(f) { listeners.push(f); },
-  reset() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ } location.reload(); },
+  reset() { saveBlocked = true; try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ } location.reload(); },   // no save on the way out
 };
 UI.bind({
   getTime: () => st.time, setTime: t => { st.time = ((t % 24) + 24) % 24; },

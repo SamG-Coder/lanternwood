@@ -42,6 +42,7 @@ function begin() {
   $("c").focus({ preventScroll: true });
 }
 $("begin").addEventListener("click", begin);
+UI.begin = begin;
 
 // ---------------------------------------------------------------- HUD
 let regionTimer = 0;
@@ -83,6 +84,7 @@ function toggleSheet(open) {
   root.classList.toggle("sheet-open", o);
   sheet.setAttribute("aria-hidden", String(!o));
 }
+UI.toggleSheet = toggleSheet;
 $("btn-settings").addEventListener("click", () => toggleSheet());
 $("sheet-close").addEventListener("click", () => toggleSheet(false));
 $("scrim").addEventListener("click", () => toggleSheet(false));
@@ -121,6 +123,7 @@ function showHints() {
   hintTimer = setTimeout(() => root.classList.remove("hints"), mobile ? 6000 : 9000);
 }
 $("btn-help") && $("btn-help").addEventListener("click", showHints);
+UI.showHints = showHints;
 
 // ---------------------------------------------------------------- fullscreen + orientation
 const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
