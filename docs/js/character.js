@@ -25,6 +25,7 @@ let nf = 0;
 for (const [name, n, fps] of ORDER) { ANIMS[name] = [nf, n, fps]; nf += n; }
 const FRAMES = nf;
 
+const pmod = (v, n) => ((Math.floor(v) || 0) % n + n) % n;   // a look index always lands on a real entry
 const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 const shade = (c, k) => c.map(v => Math.max(0, Math.min(255, Math.round(v * k))));
 const rad = d => d * Math.PI / 180;
@@ -114,11 +115,11 @@ function pixel(F, p, col, z) { put(F, Math.floor(p[0] + CX), Math.floor(p[1]), c
 // ---------------------------------------------------------------- one frame
 function drawFrame(look, equip, anim, i) {
   const L = { ...DEFAULT_LOOK, ...look };
-  const skin = hex(PAL.skin[L.skin % PAL.skin.length]), hair = hex(PAL.hair[L.hairColor % PAL.hair.length]);
-  const tunic = hex(PAL.cloth[L.tunic % PAL.cloth.length]), trousers = hex(PAL.cloth[L.trousers % PAL.cloth.length]);
-  const cloakC = hex(PAL.cloth[L.cloak % PAL.cloth.length]), boots = hex(PAL.boots[L.boots % PAL.boots.length]);
+  const skin = hex(PAL.skin[pmod(L.skin, PAL.skin.length)]), hair = hex(PAL.hair[pmod(L.hairColor, PAL.hair.length)]);
+  const tunic = hex(PAL.cloth[pmod(L.tunic, PAL.cloth.length)]), trousers = hex(PAL.cloth[pmod(L.trousers, PAL.cloth.length)]);
+  const cloakC = hex(PAL.cloth[pmod(L.cloak, PAL.cloth.length)]), boots = hex(PAL.boots[pmod(L.boots, PAL.boots.length)]);
   const belt = [58, 40, 26], wood = [122, 92, 60], steel = [150, 156, 164];
-  const sturdy = L.build === 1;
+  const sturdy = pmod(L.build, BUILDS.length) === 1;
   const P = pose(anim, i), F = makeFrame();
   const rot = (v, a) => [v[0] * Math.cos(a) + v[1] * Math.sin(a), -v[0] * Math.sin(a) + v[1] * Math.cos(a)];
   const add = (a, b) => [a[0] + b[0], a[1] + b[1]];
@@ -179,7 +180,7 @@ function drawFrame(look, equip, anim, i) {
   capsule(F, fF, add(fF, [1.8, 0.2]), 0.95, 0.85, boots, { z: 0.07 });
   // 6. head, hair, face
   capsule(F, neck, add(neck, rot([0, 1.2], lean)), 0.9, 0.9, skin, { z: 0.02 });
-  const hs = L.hair % HAIR_STYLES.length, hr = 2.9;
+  const hs = pmod(L.hair, HAIR_STYLES.length), hr = 2.9;
   if (hs === 1) poly(F, [add(head, [-2.6, 1]), add(head, [0.2, 1]), add(head, [-0.6, -5]), add(head, [-3.2, -4.2])], shade(hair, 0.85), { z: -0.01 });
   if (hs === 2) capsule(F, add(head, [-2.4, 0.6]), add(head, [-4.2 - P.cloak * 0.3, -3.2]), 1.0, 0.7, shade(hair, 0.85), { z: -0.01 });
   if (hs === 4) poly(F, [add(head, [-3.6, 2.6]), add(head, [2.0, 3.4]), add(head, [3.2, 0.5]), add(head, [1.0, -3.4]), add(head, [-3.8, -3.8])], cloakC, { z: 0.0, normal: [-0.1, 0.2, 0.97] });

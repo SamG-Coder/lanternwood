@@ -6,7 +6,7 @@
 const $ = id => document.getElementById(id);
 const D = window.LWData, S = window.LWState, CH = window.LWCharacter;
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; };
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // ---------------------------------------------------------------- pixel icons (16 x 16, drawn in code)
 const iconCache = {};
@@ -176,7 +176,7 @@ $("touch-buttons").appendChild(act);
 const creator = el("div"); creator.id = "creator"; document.body.appendChild(creator);
 
 // ---------------------------------------------------------------- journal
-let tab = "char", selSlot = -1, craftSkill = "alchemy";
+let tab = "char", selSlot = -1, craftSkill = "alchemy", dropArm = -1;
 const root = document.documentElement;
 function openJournal(t) {
   if (!window.Game || !Game.hasCharacter()) return;
@@ -227,8 +227,16 @@ function render() {
         ${D.ITEMS[it.id].kind === "potion" ? '<button class="btn" data-do="use">Use</button>' : ""}
         ${D.ITEMS[it.id].slot || D.ITEMS[it.id].tool ? '<button class="btn" data-do="equip">Equip</button>' : ""}
         <button class="btn ghost" data-do="drop">Drop</button></div>` : '<div class="dd" style="align-self:center">Select an item to see what it is.</div>'}</div>`;
-    body.querySelectorAll(".cell").forEach(c => c.addEventListener("click", () => { selSlot = ch.inv[+c.dataset.i] ? +c.dataset.i : -1; render(); }));
-    body.querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", () => { Game.dispatch({ t: b.dataset.do, slot: selSlot }); if (!ch.inv[selSlot]) selSlot = -1; }));
+    body.querySelectorAll(".cell").forEach(c => c.addEventListener("click", () => { selSlot = ch.inv[+c.dataset.i] ? +c.dataset.i : -1; dropArm = -1; render(); }));
+    body.querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", () => {
+      const it2 = ch.inv[selSlot];
+      // dropping a whole stack asks twice
+      if (b.dataset.do === "drop" && it2 && it2.n > 1 && dropArm !== selSlot) { dropArm = selSlot; b.textContent = `Drop all ${it2.n}?`; return; }
+      dropArm = -1;
+      Game.dispatch({ t: b.dataset.do, slot: selSlot });
+      if (!Game.character().inv[selSlot]) selSlot = -1;
+      render();
+    }));
   } else {
     const profs = ["alchemy", "woodworking", "masonry"];
     const busy = Game.action();
@@ -272,14 +280,16 @@ function onEvents(evs) {
 }
 
 // ---------------------------------------------------------------- the action prompt (called every frame)
-let lastPrompt = "";
+let lastPrompt = "", lastBusy = null;
 function frame(p) {
   if (UI.started && window.Game && !Game.hasCharacter() && !root.classList.contains("creating")) openCreator();
+  // crafting progress: re-render only when a craft starts or ends, then just move the bar
   const busy = window.Game && Game.action();
-  if (busy && busy.kind === "craft" && journalOpen() && tab === "craft") {
+  const busyId = busy && busy.kind === "craft" ? busy.id : null;
+  if (busyId !== lastBusy) { lastBusy = busyId; render(); }
+  if (busyId && journalOpen() && tab === "craft") {
     const bar = journal.querySelector(".recipe.busy .cbar i"); if (bar) bar.style.width = (busy.progress * 100) + "%";
-    else render();
-  } else if (!busy && journal.querySelector(".recipe.busy")) render();
+  }
   root.classList.toggle("has-target", !!(p && UI.started));
   if (!p || !UI.started || journalOpen()) { if (lastPrompt) { prompt.style.display = "none"; lastPrompt = ""; } return; }
   const locked = p.level < p.req;
@@ -324,7 +334,10 @@ function openCreator() {
   creator.onclick = e => {
     const b = e.target.closest("button"); if (!b) return;
     if (b.dataset.anim) { animName = b.dataset.anim; }
-    else if (b.dataset.step) look[b.dataset.step] += +b.dataset.d;
+    else if (b.dataset.step) {
+      const N = b.dataset.step === "build" ? CH.BUILDS.length : CH.HAIR_STYLES.length;
+      look[b.dataset.step] = ((look[b.dataset.step] + +b.dataset.d) % N + N) % N;
+    }
     else if (b.dataset.off) look.cloakOn = 0;
     else if (b.dataset.k) { look[b.dataset.k] = +b.dataset.v; if (b.dataset.k === "cloak") look.cloakOn = 1; }
     else if (b.id === "cr-rand") {
@@ -358,9 +371,10 @@ function openCreator() {
 addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT" && e.target.type === "text") return;
   if (!UI.started || !window.Game || !Game.hasCharacter() || root.classList.contains("creating")) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === "e" && !e.repeat && !journalOpen()) Game.interact();
-  if (k === "tab" && !journalOpen()) { e.preventDefault(); Game.nextTarget(); }
+  if (k === "tab" && !journalOpen() && Game.choices() > 1) { e.preventDefault(); Game.nextTarget(); }
   if (k === "i") journalOpen() && tab === "bag" ? closeJournal() : openJournal("bag");
   if (k === "k") journalOpen() && tab === "char" ? closeJournal() : openJournal("char");
   if (k === "c") journalOpen() && tab === "craft" ? closeJournal() : openJournal("craft");

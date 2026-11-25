@@ -54,7 +54,10 @@ function workerFailed(why) {
 }
 try {
   if (/[?&]noworker/.test(location.search)) throw new Error("disabled by ?noworker");   // debug: test the fallback
-  decoder = new Worker(vurl("js/decoder.js") + (LV["js/rtpack.js"] ? `&rt=${LV["js/rtpack.js"]}` : ""));
+  const q = new URLSearchParams();
+  if (LV["js/decoder.js"]) q.set("v", LV["js/decoder.js"]);
+  if (LV["js/rtpack.js"]) q.set("rt", LV["js/rtpack.js"]);
+  decoder = new Worker("js/decoder.js" + (q.toString() ? "?" + q : ""));
   decoder.onerror = e => { e.preventDefault && e.preventDefault(); workerFailed(e.message || "worker error"); };
   decoder.onmessageerror = () => workerFailed("message error");
   decoder.onmessage = e => { const job = pending.get(e.data.id); pending.delete(e.data.id); if (job) job.done(e.data); };
@@ -668,15 +671,37 @@ function rebuildPlayer(force) {
 
 // ---------------------------------------------------------------- the character (game state)
 const SAVE_KEY = "lanternwood.save.v1";
-let ch = null;
-try { const raw = localStorage.getItem(SAVE_KEY); if (raw) ch = LWState.load(raw); } catch (e) { ch = null; }
+// a signature of this world's layout: saved node state only applies to the world it was made in
+const WORLD_SIG = (() => { let h = 5381; for (const o of objects) { const k = o.key; for (let i = 0; i < k.length; i++) h = ((h * 33) ^ k.charCodeAt(i)) >>> 0; } return objects.length + ":" + h.toString(36); })();
+let ch = null, saveBlocked = false;
 const listeners = [];
 function emit(events) { for (const f of listeners) try { f(events); } catch (e) { console.error(e); } }
-function save() { if (!ch) return; ch.pos = { x: +st.x.toFixed(2), d: +st.d.toFixed(2) }; ch.time = +st.time.toFixed(3); try { localStorage.setItem(SAVE_KEY, JSON.stringify(ch)); } catch (e) { /* private mode */ } }
+try {
+  const raw = localStorage.getItem(SAVE_KEY);
+  if (raw) {
+    ch = LWState.load(raw);
+    // a save that can't be read is kept aside (never deleted) and the walk starts fresh
+    if (!ch) localStorage.setItem(SAVE_KEY + ".unreadable." + Date.now(), raw);
+  }
+} catch (e) { ch = null; }
+if (ch && ch.world !== WORLD_SIG) { ch.nodes = {}; ch.world = WORLD_SIG; }
+function save() {
+  if (!ch || saveBlocked) return;
+  ch.pos = { x: +st.x.toFixed(2), d: +st.d.toFixed(2) }; ch.time = +st.time.toFixed(3); ch.world = WORLD_SIG;
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(ch)); } catch (e) { /* private mode */ }
+}
+// another tab of the game writing the same save: stop saving here rather than overwrite it
+addEventListener("storage", e => {
+  if (e.key !== SAVE_KEY || saveBlocked || !ch) return;
+  saveBlocked = true;
+  emit([{ t: "error", why: "Lanternwood is open in another tab; this tab stopped saving" }]);
+});
+addEventListener("pagehide", () => save());
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") save(); });
 // every change to the character goes through LWState.act (the same rules a server will run)
-function dispatch(cmd) {
+function dispatch(cmd, extra) {
   if (!ch) return [];
-  const ev = LWState.act(ch, cmd, { now: Date.now() });
+  const ev = LWState.act(ch, cmd, { now: Date.now(), ...(extra || {}) });
   for (const e of ev) {
     if (e.t === "spent" && e.hide) { const o = objects.find(q => q.key === e.key); if (o) { o.hidden = true; restampAround(o); } }
     if (e.t === "equipped" || e.t === "unequipped") rebuildPlayer();
@@ -701,7 +726,7 @@ function syncNodes() {
 const st = {
   x: 6, d: 14, h: 0, vx: 0, vh: 0, facing: 1, onGround: true, walkT: 0,
   camX: 6, time: 8.5, flow: true, region: -1, toastT: 0,
-  action: null, target: null, animT: 0, moved: 0, jumps: 0, saveT: 0, cycle: 0, choices: 0,
+  action: null, target: null, animT: 0, moved: 0, ran: 0, jumps: 0, saveT: 0, cycle: 0, choices: 0,
 };
 if (ch) { st.x = ch.pos.x; st.d = ch.pos.d; st.camX = st.x + 3; st.time = ch.time; syncNodes(); }
 rebuildPlayer(true);
@@ -711,18 +736,19 @@ window.Game = {
   hasCharacter: () => !!ch,
   create(name, look) {
     ch = LWState.newCharacter(name, look, Date.now());
-    ch.pos = { x: st.x, d: st.d }; ch.time = st.time;
+    ch.pos = { x: st.x, d: st.d }; ch.time = st.time; ch.world = WORLD_SIG; saveBlocked = false;
     rebuildPlayer(true); save(); emit([{ t: "created" }]);
   },
   setLook(look) { if (!ch) return; ch.look = look; rebuildPlayer(); save(); emit([{ t: "look" }]); },
-  dispatch,
+  dispatch: cmd => dispatch(cmd),
+  choices: () => st.choices,
   craft(id) {
     const r = LWData.RECIPES.find(x => x.id === id);
     if (!ch || !r) return;
     if (st.action) { emit([{ t: "error", why: "You're busy" }]); return; }
     const c = LWState.canCraft(ch, r);
     if (!c.ok) { emit([{ t: "error", why: c.why }]); return; }
-    st.action = { kind: "craft", recipe: r, t: 0, dur: r.time, anim: "craft" };
+    st.action = { kind: "craft", recipe: r, t: 0, dur: r.time, anim: "craft", startedAt: Date.now() };
     emit([{ t: "start", kind: "craft", id, dur: r.time }]);
   },
   interact: () => interact(),
@@ -734,7 +760,7 @@ window.Game = {
 UI.bind({
   getTime: () => st.time, setTime: t => { st.time = ((t % 24) + 24) % 24; },
   getFlow: () => st.flow, setFlow: f => { st.flow = f; },
-  setQuality: q => { try { P.light = program(lightSource(QUALITY[q] || QUALITY.high)); } catch (e) { console.error(e); } },
+  setQuality: q => { try { const old = P.light; P.light = program(lightSource(QUALITY[q] || QUALITY.high)); gl.deleteProgram(old.p); } catch (e) { console.error(e); } },
 });
 // gatherable nodes in reach, best first: side-to-side distance matters most (you stand at a tree's
 // trunk, beside a plant), depth less; Tab cycles through the rest
@@ -766,14 +792,17 @@ function interact() {
   if (lvl < node.req) { emit([{ t: "error", why: `Needs ${LWData.SKILLS[node.skill].name} ${node.req}` }]); return; }
   const ns = LWState.nodeState(ch, o.key, node, Date.now());
   if (!ns.ready) { emit([{ t: "error", why: node.deplete ? "It needs time to grow back" : "This tree needs rest" }]); return; }
+  if (!LWState.roomForNode(ch, node)) { emit([{ t: "error", why: "Your bag is full" }]); return; }
   st.facing = o.x >= st.x ? 1 : -1;
   const anim = node.skill === "forestry" ? (node.deplete && o.species.startsWith("Shrub") ? "gather" : "chop") : node.skill === "stonecutting" ? "mine" : "gather";
   const dur = LWState.gatherTime(ch, node);
-  st.action = { kind: "gather", o, t: 0, dur, anim };
+  st.action = { kind: "gather", o, t: 0, dur, anim, startedAt: Date.now() };
   emit([{ t: "start", kind: "gather", dur }]);
 }
 function update(dt) {
-  const inp = UI.started && ch ? UI.input : { ax: 0, ad: 0, jump: false, run: false };
+  const menus = document.documentElement.classList;
+  const busyUI = menus.contains("journal-open") || menus.contains("sheet-open") || menus.contains("creating");
+  const inp = UI.started && ch && !busyUI ? UI.input : { ax: 0, ad: 0, jump: false, run: false };
   const bonus = ch ? LWState.agilityBonus(ch) : 1;
   const run = inp.run ? 1.9 : 1.0;
   // moving or jumping ends an action
@@ -789,8 +818,9 @@ function update(dt) {
   if (st.h <= 0) { st.h = 0; st.vh = 0; st.onGround = true; }
   st.walkT += Math.abs(st.vx) * dt * 2.2;
   if (Math.abs(st.vx) > 0.5 || ad) st.cycle = 0;
-  st.moved += Math.hypot(st.x - x0, st.d - d0) * (inp.run ? 1.5 : 1);
-  if (ch && (st.moved >= 16 || st.jumps >= 3)) { dispatch({ t: "move", metres: st.moved, jumps: st.jumps }); st.moved = 0; st.jumps = 0; }
+  const stepM = Math.hypot(st.x - x0, st.d - d0);
+  st.moved += stepM; if (inp.run) st.ran += stepM;
+  if (ch && (st.moved >= 16 || st.jumps >= 3)) { dispatch({ t: "move", metres: st.moved, runMetres: st.ran, jumps: st.jumps }); st.moved = 0; st.ran = 0; st.jumps = 0; }
   // the action in progress
   st.animT += dt;
   if (st.action) {
@@ -798,8 +828,9 @@ function update(dt) {
     a.t += dt;
     if (a.t >= a.dur) {
       st.action = null;
-      if (a.kind === "gather") dispatch({ t: "gather", key: a.o.key, species: a.o.species, region: a.o.region });
-      else if (a.kind === "craft") dispatch({ t: "craft", id: a.recipe.id });
+      if (a.kind === "gather") dispatch({ t: "gather", key: a.o.key, species: a.o.species, region: a.o.region },
+                                        { player: { x: st.x, d: st.d }, at: { x: a.o.x, d: a.o.d }, startedAt: a.startedAt });
+      else if (a.kind === "craft") dispatch({ t: "craft", id: a.recipe.id }, { startedAt: a.startedAt });
     }
   }
   st.target = !ch ? null : st.action ? (st.action.o || null) : findTarget();

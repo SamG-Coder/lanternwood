@@ -160,6 +160,7 @@ function keyInput() {
 addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT" && e.target.type === "text") return;   // typing a name
   if (root.classList.contains("creating")) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;   // browser shortcuts (Ctrl+F, Ctrl+C...) stay the browser's
   const k = e.key.toLowerCase();
   if (e.target.tagName === "INPUT" && e.target.type === "range" && k.startsWith("arrow")) return;
   if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
@@ -223,5 +224,6 @@ runBtn.addEventListener("pointerdown", e => {
 addEventListener("keydown", () => { touchActive = false; }, true);
 // no browser gestures over the game
 ["gesturestart", "dblclick"].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
-document.addEventListener("touchmove", e => { if (!e.target.closest(".sheet-body")) e.preventDefault(); }, { passive: false });
+// no page scrolling or rubber-banding over the game; panels that scroll keep their own touch scrolling
+document.addEventListener("touchmove", e => { if (!e.target.closest(".sheet-body, .j-body, .cr, [data-scroll]")) e.preventDefault(); }, { passive: false });
 })();

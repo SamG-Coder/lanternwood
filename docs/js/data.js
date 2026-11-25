@@ -126,7 +126,11 @@ const REGION_NODES = {
     Prop_Boulders: { skill: "stonecutting", req: 15, xp: 30, time: 3.6, yields: [["sandstone", 1, 2]], uses: 3, respawn: 260, deplete: true },
   },
 };
-function nodeFor(species, region) { return (REGION_NODES[region] && REGION_NODES[region][species]) || NODES[species] || null; }
+const own = (o, k) => typeof k === "string" && Object.prototype.hasOwnProperty.call(o, k);
+function nodeFor(species, region) {
+  if (own(REGION_NODES, region) && own(REGION_NODES[region], species)) return REGION_NODES[region][species];
+  return own(NODES, species) ? NODES[species] : null;
+}
 
 // ---------------------------------------------------------------- recipes
 const RECIPES = [
