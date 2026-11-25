@@ -25,9 +25,15 @@ own 3D shape, so the light falls on it the way it would on the real thing.
 | **Shift** | Run |
 | **[ / ]** | Time of day back / forward |
 | **T** | Pause or resume time |
-| **H** | Settings: look, bands, depth of field, bloom, haze, wind |
+| **F** | Fullscreen |
+| **H** | Settings: time of day, look, depth of field, bloom, haze, wind, light quality |
 
-Needs a browser with WebGL2 (any current desktop browser).
+**On a phone or tablet:** turn it sideways, then tap *Begin the walk*. The game goes fullscreen
+and locks to landscape where the browser allows it. Drag anywhere on the left half to walk
+(push to the edge to run). Use **⤒** to jump and **Run** to toggle running. Touch devices
+start on *Balanced* light quality, which shortens the traced rays.
+
+Needs a browser with WebGL2: any current desktop or mobile browser.
 
 ## What makes it different
 

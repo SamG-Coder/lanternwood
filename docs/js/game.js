@@ -7,8 +7,7 @@
 "use strict";
 
 const $ = id => document.getElementById(id);
-const loadingEl = $("loading"), barEl = $("bar").firstElementChild;
-function fail(e) { console.error(e); $("err").textContent = String(e && e.stack || e); }
+function fail(e) { console.error(e); UI.error(String(e && e.message || e)); }
 
 async function fetchWithProgress(url, onProgress) {
   const res = await fetch(url);
@@ -30,7 +29,7 @@ async function fetchWithProgress(url, onProgress) {
 (async function main() {
 try {
 // the world ships as one RTPack file (docs/js/rtpack.js): layout, catalog and every sprite
-const packBuf = await fetchWithProgress("data/world.rtp", f => { barEl.style.width = (f * 60) + "%"; });
+const packBuf = await fetchWithProgress("data/world.rtp", f => UI.setProgress(f * 0.6));
 const pack = RTPack.openFile(packBuf);
 const world = pack.meta.world, catalog = pack.meta.catalog;
 const decoder = new Worker("js/decoder.js");
@@ -197,6 +196,8 @@ void main() {
 
 // ---- lighting: rays through each sprite's own slab (fine self-shadow) and through the world's
 // canopy volume (shadows from every tree, also those above the top of the screen)
+const QUALITY = { high: { grid: 110, g0: 0.32, gk: 0.012, self: 56 }, balanced: { grid: 52, g0: 0.62, gk: 0.03, self: 30 } };
+const lightSource = q => FS_LIGHT.replace("__GRID_STEPS__", q.grid).replace("__G0__", q.g0.toFixed(3)).replace("__GK__", q.gk.toFixed(3)).replace("__SELF_STEPS__", q.self);
 const FS_LIGHT = COMMON + `
 uniform sampler2D g0t, g1t, g2t, g3t, g4t, gridT;
 uniform vec4 u_grid;                  // x0, d0, cell size, unused
@@ -211,8 +212,8 @@ out vec4 o;
 float gridTau(vec3 p, vec3 L, float maxT, vec4 self) {
   // march the canopy volume; skip the pixel's own crown (its self-shadow is traced in the sprite)
   float tau = 0.0, t = 0.15;
-  for (int i = 0; i < 110; i++) {
-    float step = 0.32 + float(i) * 0.012;
+  for (int i = 0; i < __GRID_STEPS__; i++) {
+    float step = __G0__ + float(i) * __GK__;
     t += step;
     if (t > maxT) break;
     vec3 q = p + L * t;
@@ -241,7 +242,7 @@ float selfTau(ivec2 ip, vec3 L, float d0, float id, float dObj) {
   float tau = 0.0;
   vec2 sp = vec2(ip) + 0.5;
   float z = d0 + 0.02;
-  for (int i = 1; i < 56; i++) {
+  for (int i = 1; i < __SELF_STEPS__; i++) {
     sp += dir; z -= L.z * stepM;       // L.z toward the camera lowers the distance
     ivec2 q = ivec2(floor(sp));
     if (q.x < 0 || q.y < 0 || q.x >= int(VW) || q.y >= int(VH)) break;
@@ -470,7 +471,7 @@ void main() {
 }`;
 
 const P = {
-  ground: program(FS_GROUND), sprite: program(FS_SPRITE), light: program(FS_LIGHT),
+  ground: program(FS_GROUND), sprite: program(FS_SPRITE), light: program(lightSource(QUALITY[UI.quality] || QUALITY.high)),
   style: program(FS_STYLE), blur: program(FS_BLUR), comp: program(FS_COMP),
 };
 
@@ -649,28 +650,20 @@ const st = {
   x: 6, d: 14, h: 0, vx: 0, vh: 0, facing: 1, onGround: true, walkT: 0,
   camX: 6, time: 8.5, flow: true, region: -1, toastT: 0,
 };
-const keys = new Set();
-addEventListener("keydown", e => {
-  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) e.preventDefault();
-  keys.add(e.key.toLowerCase());
-  if (e.key === "h" || e.key === "H") $("panel").classList.toggle("open");
-  if (e.key === "t" || e.key === "T") st.flow = !st.flow;
-  if (e.key === "[") st.time = (st.time + 23) % 24;
-  if (e.key === "]") st.time = (st.time + 1) % 24;
+UI.bind({
+  getTime: () => st.time, setTime: t => { st.time = ((t % 24) + 24) % 24; },
+  getFlow: () => st.flow, setFlow: f => { st.flow = f; },
+  setQuality: q => { try { P.light = program(lightSource(QUALITY[q] || QUALITY.high)); } catch (e) { console.error(e); } },
 });
-addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
-addEventListener("blur", () => keys.clear());
-const down = (...k) => k.some(x => keys.has(x));
-
 function update(dt) {
-  const run = down("shift") ? 1.9 : 1.0;
-  let ax = (down("d", "arrowright") ? 1 : 0) - (down("a", "arrowleft") ? 1 : 0);
-  let ad = (down("w", "arrowup") ? 1 : 0) - (down("s", "arrowdown") ? 1 : 0);
+  const inp = UI.started ? UI.input : { ax: 0, ad: 0, jump: false, run: false };
+  const run = inp.run ? 1.9 : 1.0;
+  const ax = inp.ax, ad = inp.ad;
   st.vx += (ax * 3.4 * run - st.vx) * Math.min(1, dt * 10);
   st.x = Math.max(1, Math.min(LEN - 1, st.x + st.vx * dt));
   st.d = Math.max(PATH[0] + 0.2, Math.min(PATH[1] - 0.2, st.d + ad * 2.2 * run * dt));
-  if (ax) st.facing = ax;
-  if (st.onGround && down(" ")) { st.vh = 5.2; st.onGround = false; }
+  if (ax) st.facing = Math.sign(ax);
+  if (st.onGround && inp.jump) { st.vh = 5.2; st.onGround = false; }
   st.vh -= 15 * dt; st.h += st.vh * dt;
   if (st.h <= 0) { st.h = 0; st.vh = 0; st.onGround = true; }
   st.walkT += Math.abs(st.vx) * dt * 2.2;
@@ -678,15 +671,12 @@ function update(dt) {
   const want = st.x + st.facing * 3.0;
   st.camX += (want - st.camX) * Math.min(1, dt * 2.5);
   if (st.flow) st.time = (st.time + dt * (+$("flow").value / 100) * 0.25) % 24;
-  // region toast
+  // region: the HUD chip, and a title card when walking into a new one
   const ri = world.regions.findIndex(r => st.x >= r.x0 && st.x < r.x1);
   if (ri !== st.region && ri >= 0) {
     st.region = ri;
-    const t = $("toast");
-    t.innerHTML = `${world.regions[ri].name}<small>${["the old road", "under the beeches", "where the birches drink", "the high spruce", "the burnt ridge", "the sunlit terraces"][ri] || ""}</small>`;
-    t.style.opacity = 1; st.toastT = 3.5;
+    UI.setRegion(world.regions[ri].name, ["the old road", "under the beeches", "where the birches drink", "the high spruce", "the burnt ridge", "the sunlit terraces"][ri] || "");
   }
-  if (st.toastT > 0) { st.toastT -= dt; if (st.toastT <= 0) $("toast").style.opacity = 0; }
 }
 
 // ---------------------------------------------------------------- time of day
@@ -724,7 +714,14 @@ function resize() {
   const dpr = devicePixelRatio || 1;
   canvas.width = Math.floor(innerWidth * dpr); canvas.height = Math.floor(innerHeight * dpr);
   canvas.style.width = innerWidth + "px"; canvas.style.height = innerHeight + "px";
-  st.scale = Math.max(1, Math.floor(Math.min(canvas.width / VW, canvas.height / VH)));
+  const fit = Math.min(canvas.width / VW, canvas.height / VH), whole = Math.floor(fit);
+  const cover = Math.max(canvas.width / VW, canvas.height / VH);
+  if (UI.mobile && fit / cover > 0.82) st.scale = cover;          // phones: fill the screen, trim a little sky / foreground
+  else st.scale = whole >= 1 && whole / fit >= 0.86 ? whole : fit; // desktop: whole pixels when they fill the window well
+  // tell the interface where the picture is, so the HUD sits inside it and not in the bars
+  const dpr2 = devicePixelRatio || 1;
+  document.documentElement.style.setProperty("--gx", Math.max(0, (canvas.width - VW * st.scale) / 2 / dpr2) + "px");
+  document.documentElement.style.setProperty("--gy", Math.max(0, (canvas.height - VH * st.scale) / 2 / dpr2) + "px");
 }
 addEventListener("resize", resize); resize();
 
@@ -898,13 +895,12 @@ function frame(now) {
     const name = window.__grab; window.__grab = null;
     canvas.toBlob(b => fetch("/save?name=" + name, { method: "POST", body: b }), "image/png");
   }
-  // clock + loading screen
-  const hh = Math.floor(st.time), mm = Math.floor((st.time - hh) * 60);
-  $("clock").textContent = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}${st.flow ? "" : " ❚❚"}`;
+  // HUD clock + loading screen
+  UI.setClock(st.time, st.flow);
   if (!loadedOnce) {
     const total = drawn + waiting;
-    barEl.style.width = (60 + (total ? 40 * drawn / total : 0)) + "%";
-    if (waiting === 0 && drawn > 0) { loadedOnce = true; loadingEl.style.opacity = 0; setTimeout(() => loadingEl.remove(), 900); canvas.focus(); }
+    UI.setProgress(0.6 + (total ? 0.4 * drawn / total : 0));
+    if (waiting === 0 && drawn > 0) { loadedOnce = true; UI.ready(); }
   }
   fpsN++;
   if (now - fpsT > 1000) { window.__fps = fpsN; window.__drawn = drawn; fpsN = 0; fpsT = now; }

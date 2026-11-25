@@ -2,50 +2,318 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#07080c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="description" content="Lanternwood — walk a pixel-art world lit by ray-traced light, in your browser.">
 <title>Lanternwood — a pixel world lit by ray-traced light</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #07080c; color: #d8dbe4; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
-  canvas { position: absolute; inset: 0; display: block; outline: none; }
-  #toast { position: absolute; top: 9%; left: 0; right: 0; text-align: center; pointer-events: none; opacity: 0;
-           transition: opacity 1.2s ease; font: 600 30px/1.2 Georgia, "Times New Roman", serif; letter-spacing: 0.08em;
-           color: #f3ead2; text-shadow: 0 2px 0 #2a2116, 0 0 18px rgba(0,0,0,0.65); }
-  #toast small { display: block; font: 500 12px/1.6 system-ui, sans-serif; letter-spacing: 0.3em; color: #cdbf9c; text-transform: uppercase; }
-  #hud { position: absolute; left: 12px; bottom: 10px; color: #aab; font-size: 11px; text-shadow: 0 1px 0 #000; pointer-events: none; }
-  #clock { position: absolute; right: 14px; top: 10px; font: 600 13px/1 Georgia, serif; color: #f0e6cc; text-shadow: 0 1px 0 #000; pointer-events: none; }
-  #panel { position: absolute; right: 12px; top: 34px; width: 230px; background: rgba(10, 12, 20, 0.88); border-radius: 8px; padding: 10px 12px; display: none; }
-  #panel.open { display: block; }
-  #panel label { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; gap: 8px; }
-  #panel input[type=range] { width: 110px; }
-  #panel h2 { font-size: 12px; margin: 0 0 6px; color: #fff; font-weight: 600; }
-  #loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #07080c;
-             font: 600 18px Georgia, serif; color: #e8dfc6; gap: 12px; transition: opacity 0.8s; }
-  #bar { width: 260px; height: 4px; background: #222634; border-radius: 2px; overflow: hidden; }
-  #bar div { height: 100%; width: 0; background: #d7b86e; transition: width 0.2s; }
-  #notice { position: absolute; right: 12px; bottom: 10px; color: #778; font-size: 10px; text-shadow: 0 1px 0 #000; max-width: 46vw; text-align: right; }
-  #err { color: #f88; font: 12px monospace; white-space: pre-wrap; max-width: 80vw; }
+  :root {
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --ink: #f1ead8; --ink-2: #c9bfa6; --ink-3: #8f8a7c;
+    --gold: #d9b56a; --gold-2: #a98845;
+    --glass: rgba(14, 15, 20, 0.62); --glass-2: rgba(20, 21, 28, 0.86); --line: rgba(241, 234, 216, 0.14);
+    --sa-t: env(safe-area-inset-top, 0px); --sa-r: env(safe-area-inset-right, 0px);
+    --sa-b: env(safe-area-inset-bottom, 0px); --sa-l: env(safe-area-inset-left, 0px);
+    --pad: 18px;
+    --gx: 0px; --gy: 0px;   /* the game picture's inset from the window (letterbox), set by game.js */
+  }
+  .is-mobile { --pad: 12px; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #07080c; color: var(--ink); font: 13px/1.45 var(--sans); overflow: hidden;
+               overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  canvas { position: fixed; inset: 0; display: block; outline: none; touch-action: none; }
+  button { font: inherit; color: inherit; }
+
+  /* ---------- glass */
+  .glass { background: var(--glass); border: 1px solid var(--line); border-radius: 12px;
+           -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+           box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28); }
+
+  /* ---------- HUD: hidden until play */
+  .hud { position: fixed; z-index: 5; opacity: 0; transform: translateY(-4px); transition: opacity .6s ease, transform .6s ease; pointer-events: none; }
+  .is-playing .hud { opacity: 1; transform: none; }
+  .is-playing .hud.interactive { pointer-events: auto; }
+
+  #where { top: calc(var(--pad) + max(var(--sa-t), var(--gy))); left: calc(var(--pad) + max(var(--sa-l), var(--gx))); padding: 9px 14px 9px 12px; display: flex; align-items: center; gap: 12px; }
+  #where .divider { width: 1px; align-self: stretch; background: var(--line); }
+  #region-name { font: 600 15px/1.15 var(--serif); letter-spacing: .02em; }
+  #region-sub { font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-3); margin-top: 2px; }
+  #clock { display: flex; align-items: center; gap: 8px; }
+  #clock-icon svg { width: 18px; height: 18px; fill: var(--gold); stroke: var(--gold); stroke-width: 1.6; display: block; }
+  #clock-time { font: 600 15px/1 var(--serif); font-variant-numeric: tabular-nums; }
+  #clock-part { font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-3); margin-top: 3px; }
+
+  #tools { top: calc(var(--pad) + max(var(--sa-t), var(--gy))); right: calc(var(--pad) + max(var(--sa-r), var(--gx))); display: flex; gap: 8px; }
+  .icon-btn { width: 40px; height: 40px; display: grid; place-items: center; cursor: pointer; padding: 0; transition: background .2s, transform .1s; }
+  .icon-btn:hover { background: var(--glass-2); }
+  .icon-btn:active { transform: scale(.94); }
+  .icon-btn svg { width: 18px; height: 18px; fill: none; stroke: var(--ink); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  #btn-time .i-play { display: none; } #btn-time.paused .i-play { display: block; } #btn-time.paused .i-pause { display: none; }
+  #btn-fs .i-exit { display: none; } .is-fullscreen #btn-fs .i-enter { display: none; } .is-fullscreen #btn-fs .i-exit { display: block; }
+  .no-fullscreen #btn-fs { display: none; }
+
+  /* region card: a larger title on entering a region */
+  #region-card { position: fixed; z-index: 4; left: 0; right: 0; top: 18%; text-align: center; pointer-events: none; opacity: 0;
+                 transform: translateY(6px); transition: opacity 1.1s ease, transform 1.1s ease; }
+  #region-card.show { opacity: 1; transform: none; }
+  .rc-name { font: 600 clamp(24px, 4.2vw, 40px)/1.1 var(--serif); letter-spacing: .06em; color: var(--ink);
+             text-shadow: 0 2px 0 rgba(0,0,0,.55), 0 0 28px rgba(0,0,0,.55); }
+  .rc-rule { width: 120px; height: 1px; margin: 10px auto 8px; background: linear-gradient(90deg, transparent, var(--gold), transparent); }
+  .rc-sub { font-size: 11px; letter-spacing: .32em; text-transform: uppercase; color: var(--ink-2); text-shadow: 0 1px 0 #000; }
+
+  /* keyboard hints (desktop) */
+  #hints { left: 50%; bottom: calc(var(--pad) + 14px + max(var(--sa-b), var(--gy))); transform: translate(-50%, 6px); display: flex; gap: 18px; padding: 10px 16px; align-items: center; white-space: nowrap; }
+  .is-playing.hints #hints { opacity: 1; transform: translate(-50%, 0); }
+  .is-playing:not(.hints) #hints { opacity: 0; }
+  .hint { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; }
+  kbd { min-width: 22px; height: 22px; padding: 0 6px; display: inline-grid; place-items: center; border-radius: 5px;
+        background: rgba(241,234,216,.08); border: 1px solid rgba(241,234,216,.22); border-bottom-width: 2px; font: 600 11px var(--sans); color: var(--ink); }
+  .is-mobile #hints { display: none; }
+
+  #notice { position: fixed; z-index: 3; right: calc(var(--pad) + max(var(--sa-r), var(--gx))); bottom: calc(8px + max(var(--sa-b), var(--gy))); color: rgba(241,234,216,.42);
+            font-size: 10px; text-align: right; max-width: 46vw; pointer-events: none; text-shadow: 0 1px 0 #000; }
+  .is-mobile #notice { left: 50%; right: auto; transform: translateX(-50%); bottom: calc(4px + max(var(--sa-b), var(--gy))); max-width: 60vw; text-align: center; font-size: 9px; }
+  #notice { transition: opacity .5s; } .is-playing.hints #notice, .sheet-open #notice { opacity: 0; }
+  #notice .short { display: none; } .is-mobile #notice .long { display: none; } .is-mobile #notice .short { display: inline; }
+
+  /* ---------- settings sheet */
+  #scrim { position: fixed; inset: 0; z-index: 8; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none; transition: opacity .3s; }
+  .sheet-open #scrim { opacity: 1; pointer-events: auto; }
+  #sheet { position: fixed; z-index: 9; top: calc(var(--pad) + var(--sa-t)); right: calc(var(--pad) + var(--sa-r)); bottom: calc(var(--pad) + var(--sa-b));
+           width: 320px; max-width: calc(100vw - 2 * var(--pad)); display: flex; flex-direction: column; background: var(--glass-2);
+           transform: translateX(calc(100% + 40px)); transition: transform .38s cubic-bezier(.2,.8,.2,1); }
+  .sheet-open #sheet { transform: none; }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 10px 18px; border-bottom: 1px solid var(--line); }
+  .sheet-head h2 { margin: 0; font: 600 17px var(--serif); letter-spacing: .04em; }
+  .sheet-head .icon-btn { background: transparent; border: 0; }
+  .sheet-body { overflow-y: auto; padding: 2px 18px 18px; -webkit-overflow-scrolling: touch; }
+  .sheet-body { scrollbar-width: thin; scrollbar-color: rgba(241,234,216,.22) transparent; }
+  .sheet-body::-webkit-scrollbar { width: 6px; } .sheet-body::-webkit-scrollbar-thumb { background: rgba(241,234,216,.22); border-radius: 3px; }
+  .group { padding: 12px 0 4px; border-bottom: 1px solid var(--line); }
+  .group:last-child { border-bottom: 0; }
+  .group h3 { margin: 0 0 6px; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--gold); font-weight: 600; }
+  .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 12px; margin: 10px 0; }
+  .row > span { color: var(--ink-2); }
+  .row output { color: var(--ink-3); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row input[type=range] { grid-column: 1 / -1; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; margin: 0; cursor: pointer; }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--gold) var(--p, 50%), rgba(241,234,216,.16) var(--p, 50%)); }
+  input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--gold) var(--p, 50%), rgba(241,234,216,.16) var(--p, 50%)); }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: var(--ink); border: 0; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--ink); border: 0; }
+  .is-mobile input[type=range]::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -9px; }
+  .seg { display: flex; background: rgba(241,234,216,.07); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+  .seg button { flex: 1; border: 0; background: transparent; padding: 6px 10px; border-radius: 6px; cursor: pointer; color: var(--ink-2); font-size: 12px; white-space: nowrap; }
+  .seg button.on { background: rgba(241,234,216,.16); color: var(--ink); }
+  .switch { position: relative; width: 36px; height: 20px; }
+  .switch input { opacity: 0; position: absolute; inset: 0; margin: 0; cursor: pointer; z-index: 1; }
+  .switch i { position: absolute; inset: 0; border-radius: 10px; background: rgba(241,234,216,.18); transition: background .2s; }
+  .switch i::after { content: ""; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--ink); transition: transform .2s; }
+  .switch input:checked + i { background: var(--gold-2); } .switch input:checked + i::after { transform: translateX(16px); }
+  .keys-list { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; align-items: center; color: var(--ink-2); font-size: 12px; }
+  .is-mobile .keys-group { display: none; }
+  .about { color: var(--ink-3); font-size: 11px; line-height: 1.55; }
+  .about a { color: var(--ink-2); }
+
+  /* ---------- title card */
+  #title { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; text-align: center; padding: 24px;
+           background: radial-gradient(ellipse at center, rgba(7,8,12,.3) 0%, rgba(7,8,12,.78) 75%), linear-gradient(180deg, rgba(7,8,12,.15), rgba(7,8,12,.6));
+           transition: opacity .9s ease, visibility .9s; }
+  .is-playing #title { opacity: 0; visibility: hidden; }
+  .t-kicker { font-size: 11px; letter-spacing: .34em; text-transform: uppercase; color: var(--ink-2); }
+  .t-name { font: 600 clamp(38px, 8vw, 84px)/1 var(--serif); letter-spacing: .12em; margin: 14px 0 6px; padding-left: .12em;
+            text-shadow: 0 3px 0 rgba(0,0,0,.5), 0 0 40px rgba(0,0,0,.6); }
+  .t-rule { width: 180px; height: 1px; margin: 16px auto 18px; background: linear-gradient(90deg, transparent, var(--gold), transparent); }
+  .t-line { color: var(--ink-2); max-width: 520px; margin: 0 auto; font-size: 14px; }
+  #begin { margin-top: 26px; padding: 12px 28px; border-radius: 999px; border: 1px solid rgba(217,181,106,.6); background: rgba(217,181,106,.14);
+           color: var(--ink); font: 600 13px var(--sans); letter-spacing: .14em; text-transform: uppercase; cursor: pointer; transition: background .2s, transform .1s; }
+  #begin:hover, #begin:focus-visible { background: rgba(217,181,106,.28); outline: none; }
+  #begin:active { transform: scale(.97); }
+  .t-hint { margin-top: 12px; color: var(--ink-3); font-size: 11px; letter-spacing: .1em; }
+  .is-mobile .t-hint .desk { display: none; } .is-desktop .t-hint .mob { display: none; }
+  .is-mobile .t-line { font-size: 12px; max-width: 420px; }
+
+  /* ---------- loader */
+  #loader { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: #07080c; transition: opacity .8s ease; }
+  .is-loaded #loader { opacity: 0; pointer-events: none; }
+  .ld { text-align: center; }
+  .ld-name { font: 600 22px var(--serif); letter-spacing: .28em; padding-left: .28em; }
+  #load-text { margin-top: 10px; color: var(--ink-3); font-size: 11px; letter-spacing: .2em; text-transform: uppercase; }
+  .ld-track { width: 220px; height: 2px; margin: 16px auto 0; background: rgba(241,234,216,.12); overflow: hidden; border-radius: 1px; }
+  #load-bar { height: 100%; background: var(--gold); transform: scaleX(0); transform-origin: left; transition: transform .25s ease; }
+  #load-err { margin: 14px auto 0; max-width: 80vw; color: #e99; font: 11px/1.5 ui-monospace, monospace; white-space: pre-wrap; text-align: left; }
+
+  /* ---------- touch controls */
+  #touch-zone, #touch-buttons { display: none; }
+  .is-mobile.is-playing #touch-zone { display: block; position: fixed; z-index: 2; left: 0; top: 0; bottom: 0; width: 55%; touch-action: none; }
+  #stick { position: fixed; z-index: 3; width: 116px; height: 116px; margin: -58px 0 0 -58px; border-radius: 50%; border: 1.5px solid rgba(241,234,216,.32);
+           background: radial-gradient(circle, rgba(241,234,216,.08), rgba(241,234,216,.02)); opacity: 0; transition: opacity .15s; pointer-events: none; }
+  #stick.on { opacity: 1; }
+  #stick-knob { position: absolute; left: 50%; top: 50%; width: 48px; height: 48px; border-radius: 50%; transform: translate(-50%, -50%);
+                background: rgba(241,234,216,.82); box-shadow: 0 2px 10px rgba(0,0,0,.4); }
+  .stick-ghost { position: fixed; z-index: 2; left: calc(34px + var(--sa-l)); bottom: calc(30px + var(--sa-b)); width: 96px; height: 96px; border-radius: 50%;
+                 border: 1.5px dashed rgba(241,234,216,.3); display: none; place-items: center; color: rgba(241,234,216,.55); font-size: 10px;
+                 letter-spacing: .14em; text-transform: uppercase; pointer-events: none; }
+  .is-mobile.is-playing.hints .stick-ghost { display: grid; }
+  .is-mobile.is-playing #touch-buttons { display: block; position: fixed; z-index: 3; right: calc(24px + var(--sa-r)); bottom: calc(24px + var(--sa-b)); width: 170px; height: 150px; }
+  .tbtn { position: absolute; border-radius: 50%; display: grid; place-items: center; touch-action: none; cursor: pointer; padding: 0;
+          border: 1.5px solid rgba(241,234,216,.32); background: rgba(14,15,20,.42); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+          color: var(--ink); font: 600 10px var(--sans); letter-spacing: .14em; text-transform: uppercase; transition: transform .08s, background .15s; }
+  .tbtn svg { width: 26px; height: 26px; fill: none; stroke: var(--ink); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  #t-jump { right: 0; bottom: 0; width: 84px; height: 84px; }
+  #t-run { left: 0; bottom: 58px; width: 60px; height: 60px; }
+  .tbtn.down { transform: scale(.92); background: rgba(217,181,106,.3); }
+  #t-run.on { background: rgba(217,181,106,.32); border-color: rgba(217,181,106,.7); }
+
+  /* ---------- rotate prompt (phones held upright) */
+  #rotate { position: fixed; inset: 0; z-index: 30; display: none; place-items: center; text-align: center; padding: 30px; background: #07080c; }
+  .is-mobile.is-portrait #rotate { display: grid; }
+  #rotate svg { width: 74px; height: 74px; fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; animation: tilt 2.4s ease-in-out infinite; }
+  @keyframes tilt { 0%, 30% { transform: rotate(0); } 55%, 85% { transform: rotate(-90deg); } 100% { transform: rotate(0); } }
+  #rotate h2 { font: 600 22px var(--serif); letter-spacing: .06em; margin: 22px 0 6px; }
+  #rotate p { color: var(--ink-2); margin: 0 0 22px; font-size: 13px; }
+  #rotate-go { padding: 12px 24px; border-radius: 999px; border: 1px solid rgba(217,181,106,.6); background: rgba(217,181,106,.16); color: var(--ink);
+               font: 600 13px var(--sans); letter-spacing: .12em; text-transform: uppercase; }
+  .no-fullscreen #rotate-go { display: none; }
+
+  @media (max-height: 430px) {
+    #where { padding: 7px 11px; gap: 10px; }
+    #region-name, #clock-time { font-size: 13px; }
+    .icon-btn { width: 36px; height: 36px; }
+    .t-name { margin: 8px 0 4px; } .t-rule { margin: 10px auto 12px; } #begin { margin-top: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; animation: none !important; } }
 </style>
 </head>
 <body>
-<canvas id="c" tabindex="0"></canvas>
-<div id="toast"></div>
-<div id="clock"></div>
-<div id="notice">Plant, tree and rock art derived from Quixel Megascans &amp; Megaplants © Epic Games, used under the Fab EULA.
-It is licensed for use in this game only and may not be extracted or reused.</div>
-<div id="hud">A / D or ← → walk · W / S or ↑ ↓ move along the trail · Space jump · Shift run · [ ] time of day · T time flow · H settings</div>
-<div id="panel">
-  <h2>Settings</h2>
-  <label>Look <select id="look"><option value="1" selected>Banded light</option><option value="0">Raw lighting</option></select></label>
-  <label>Bands <input id="bands" type="range" min="3" max="9" value="5"></label>
-  <label>Depth of field <input id="dof" type="range" min="0" max="100" value="60"></label>
-  <label>Bloom <input id="bloom" type="range" min="0" max="100" value="45"></label>
-  <label>Haze <input id="haze" type="range" min="0" max="100" value="55"></label>
-  <label>Wind <input id="wind" type="range" min="0" max="30" value="10"></label>
-  <label>Time flow <input id="flow" type="range" min="0" max="100" value="12"></label>
-  <label>Outline <input id="outline" type="checkbox" checked></label>
-  <label>Despeckle <input id="clean" type="checkbox" checked></label>
+<canvas id="c" tabindex="0" aria-label="Lanternwood game view"></canvas>
+
+<!-- HUD -->
+<div id="where" class="hud glass" aria-live="polite">
+  <div><div id="region-name">Hearthmeadow</div><div id="region-sub">the old road</div></div>
+  <div class="divider"></div>
+  <div id="clock"><span id="clock-icon"></span><div><div id="clock-time">08:30</div><div id="clock-part">Morning</div></div></div>
 </div>
-<div id="loading"><div>Baking the light…</div><div id="bar"><div></div></div><div id="err"></div></div>
+<div id="tools" class="hud interactive">
+  <button id="btn-time" class="icon-btn glass" title="Pause time (T)" aria-label="Pause or resume time">
+    <svg class="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></svg>
+    <svg class="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5z"/></svg>
+  </button>
+  <button id="btn-fs" class="icon-btn glass" title="Fullscreen (F)" aria-label="Toggle fullscreen">
+    <svg class="i-enter" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+    <svg class="i-exit" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
+  </button>
+  <button id="btn-settings" class="icon-btn glass" title="Settings (H)" aria-label="Settings">
+    <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+  </button>
+</div>
+<div id="hints" class="hud glass">
+  <div class="hint"><kbd>A</kbd><kbd>D</kbd> Walk</div>
+  <div class="hint"><kbd>W</kbd><kbd>S</kbd> Along the trail</div>
+  <div class="hint"><kbd>Space</kbd> Jump</div>
+  <div class="hint"><kbd>Shift</kbd> Run</div>
+  <div class="hint"><kbd>H</kbd> Settings</div>
+</div>
+<div id="region-card"><div class="rc-name"></div><div class="rc-rule"></div><div class="rc-sub"></div></div>
+<div id="notice">
+  <span class="long">Plant, tree and rock art derived from Quixel Megascans &amp; Megaplants © Epic Games, used under the Fab EULA, for use in this game only; not to be extracted or reused.</span>
+  <span class="short">Plant art © Epic Games (Quixel), Fab EULA, game use only</span>
+</div>
+
+<!-- touch -->
+<div id="touch-zone"></div>
+<div id="stick"><div id="stick-knob"></div></div>
+<div class="stick-ghost">Move</div>
+<div id="touch-buttons">
+  <button id="t-run" class="tbtn" aria-label="Run">Run</button>
+  <button id="t-jump" class="tbtn" aria-label="Jump"><svg viewBox="0 0 24 24"><path d="M12 19V6M6 11l6-6 6 6"/></svg></button>
+</div>
+
+<!-- settings -->
+<div id="scrim"></div>
+<aside id="sheet" class="glass" aria-hidden="true" aria-label="Settings">
+  <div class="sheet-head"><h2>Settings</h2>
+    <button id="sheet-close" class="icon-btn" aria-label="Close settings"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="sheet-body">
+    <section class="group"><h3>Time</h3>
+      <label class="row"><span>Time of day</span><output id="tod-out">08:30</output><input id="tod" type="range" min="0" max="1439" value="510"></label>
+      <label class="row"><span>Speed of the day</span><output></output><input id="flow" type="range" min="0" max="100" value="12"></label>
+    </section>
+    <section class="group"><h3>Look</h3>
+      <div class="row"><span>Style</span><div class="seg" data-for="look"><button data-v="1">Banded</button><button data-v="0">Raw light</button></div></div>
+      <input id="look" type="hidden" value="1">
+      <label class="row"><span>Light bands</span><output></output><input id="bands" type="range" min="3" max="9" value="5"></label>
+      <label class="row"><span>Outlines</span><span class="switch"><input id="outline" type="checkbox" checked><i></i></span></label>
+      <label class="row"><span>Merge stray pixels</span><span class="switch"><input id="clean" type="checkbox" checked><i></i></span></label>
+    </section>
+    <section class="group"><h3>Camera</h3>
+      <label class="row"><span>Depth of field</span><output></output><input id="dof" type="range" min="0" max="100" value="60"></label>
+      <label class="row"><span>Bloom</span><output></output><input id="bloom" type="range" min="0" max="100" value="45"></label>
+      <label class="row"><span>Distance haze</span><output></output><input id="haze" type="range" min="0" max="100" value="55"></label>
+    </section>
+    <section class="group"><h3>World</h3>
+      <label class="row"><span>Wind</span><output></output><input id="wind" type="range" min="0" max="30" value="10"></label>
+    </section>
+    <section class="group"><h3>Performance</h3>
+      <div class="row"><span>Light quality</span><div class="seg" data-for="quality"><button data-v="high">High</button><button data-v="balanced">Balanced</button></div></div>
+      <input id="quality" type="hidden" value="high">
+    </section>
+    <section class="group keys-group"><h3>Keys</h3>
+      <div class="keys-list">
+        <span><kbd>A</kbd> <kbd>D</kbd></span><span>Walk left / right</span>
+        <span><kbd>W</kbd> <kbd>S</kbd></span><span>Move along the trail</span>
+        <span><kbd>Space</kbd></span><span>Jump</span>
+        <span><kbd>Shift</kbd></span><span>Run</span>
+        <span><kbd>[</kbd> <kbd>]</kbd></span><span>An hour back / forward</span>
+        <span><kbd>T</kbd></span><span>Pause or resume time</span>
+        <span><kbd>F</kbd></span><span>Fullscreen</span>
+        <span><kbd>H</kbd></span><span>Settings</span>
+      </div>
+    </section>
+    <section class="group about"><h3>About</h3>
+      Every plant is a photoscanned 3D model baked into a pixel sprite that keeps its shape; the light is traced through
+      those shapes every frame. <a href="https://github.com/SamG-Coder/lanternwood" target="_blank" rel="noopener">Source on GitHub</a> ·
+      <a href="NOTICE.md" target="_blank" rel="noopener">Art notice</a>
+    </section>
+  </div>
+</aside>
+
+<!-- title -->
+<div id="title">
+  <div>
+    <div class="t-kicker">A pixel world lit by traced light</div>
+    <div class="t-name">LANTERNWOOD</div>
+    <div class="t-rule"></div>
+    <p class="t-line">Walk the old road from the meadows to the pine terraces, through beechwood shade and a lantern-lit night.</p>
+    <button id="begin">Begin the walk</button>
+    <div class="t-hint"><span class="desk">or press any key</span><span class="mob">best played fullscreen, in landscape</span></div>
+  </div>
+</div>
+
+<!-- rotate -->
+<div id="rotate">
+  <div>
+    <svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/></svg>
+    <h2>Turn your device sideways</h2>
+    <p>Lanternwood is played in landscape.</p>
+    <button id="rotate-go">Play fullscreen</button>
+  </div>
+</div>
+
+<!-- loader -->
+<div id="loader"><div class="ld">
+  <div class="ld-name">LANTERNWOOD</div>
+  <div id="load-text">Gathering the light</div>
+  <div class="ld-track"><div id="load-bar"></div></div>
+  <div id="load-err"></div>
+</div></div>
+
+<script src="js/ui.js"></script>
 <script src="js/rtpack.js"></script>
 <script src="js/game.js"></script>
 </body>
