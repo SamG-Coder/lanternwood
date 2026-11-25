@@ -305,6 +305,7 @@ for (const id in D.ITEMS) if (D.ITEMS[id].kind === "potion") ok(D.EFFECTS[D.ITEM
   // a forged far-future potion does nothing
   const c3 = S.newCharacter("Z", {}, t); c3.buffs.hale = t + 1e12;
   ok(S.gatherTime(c3, D.NODES.Field_Poppy, t) === D.NODES.Field_Poppy.time, "forged potion end ignored");
+  ok(!S.buffActive(c3, t, "hale") && S.buffActive(c2, t - 2000, "hale") && !S.buffActive(c3, t, "constructor"), "buffActive matches the rules");
 }
 // curios: found in the node's region, never twice, all of them findable
 {

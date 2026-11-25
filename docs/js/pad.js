@@ -158,6 +158,9 @@ function focus(e) {
     if (!cur.matches("button, a, input")) cur.tabIndex = -1;
     try { cur.focus({ preventScroll: true }); } catch (err) { /* ignore */ }
   }
+  // a text box (no real focus, so no phone keyboard) or a disabled button can't take focus: let go of
+  // the old one, or the arrows would adopt it and pull the cursor back
+  if (document.activeElement && document.activeElement !== cur && document.activeElement !== document.body && document.activeElement.blur) document.activeElement.blur();
   ring.scrollIntoView({ block: "nearest", inline: "nearest" });
   // the bag shows whatever the cursor is on, like a console inventory
   // (an empty slot clears the details once; nothing re-renders when there is nothing to change)
@@ -172,15 +175,18 @@ function move(dx, dy) {
   const PART = ".j-head, .j-body, .sheet-head, .sheet-body, .cr-prev, .cr-main";
   const part = cur.closest(PART);
   let best = null, bs = Infinity;
+  for (const pass of dx && part ? [true, false] : [false]) {
+  if (best) break;
   for (const e of list) {
     if (e === cur || ringOf(e) === ringOf(cur)) continue;
-    if (dx && part && e.closest(PART) !== part) continue;
+    if (pass && e.closest(PART) !== part) continue;
     const b = ringOf(e).getBoundingClientRect(), bx = b.left + b.width / 2, by = b.top + b.height / 2;
     let gap, centre, off, overlap;
     if (dx) {
       if ((bx - ax) * dx <= 1) continue;
       gap = dx > 0 ? b.left - a.right : a.left - b.right; centre = Math.abs(bx - ax);
       overlap = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top); off = Math.abs(by - ay);
+      if (overlap <= 0) continue;   // left / right stay on the row, as console menus do
     } else {
       if ((by - ay) * dy <= 1) continue;
       gap = dy > 0 ? b.top - a.bottom : a.top - b.bottom; centre = Math.abs(by - ay);
@@ -188,6 +194,7 @@ function move(dx, dy) {
     }
     const s = Math.max(gap, 0) + 0.15 * centre + (overlap > 0 ? 0.1 * off : 2.5 * off + 40);
     if (s < bs) { bs = s; best = e; }
+  }
   }
   if (best) focus(best);
 }
@@ -198,6 +205,7 @@ function adjust(e, dir) {          // a slider: left / right change it in twenti
 }
 function adoptFocused(L) {
   const a = document.activeElement;
+  if (cur && cur.tagName === "INPUT" && cur.type === "text" && a !== cur) return false;
   if (!a || a === cur || a === document.body || !L.el.contains(a) || !a.matches(SEL)) return false;
   if (a.tagName === "INPUT" && a.type === "text") return false;
   focus(a); setNav(true);
@@ -341,6 +349,7 @@ function tick(now) {
   if (L) {
     // ---- menus
     const wasNav = navOn;
+    if (any && !wasNav) adoptFocused(L);
     if (any) setNav(true);
     const eat = i => eaten.add(i);
     if (L.name === "title") {
@@ -398,5 +407,5 @@ addEventListener("gamepaddisconnected", () => { if (UI.device === "pad") Object.
 addEventListener("gamepadconnected", e => {
   if (window.RPGUI && UI.started) RPGUI.toast(`<span>${e.gamepad.id.replace(/\(.*\)/, "").trim().slice(0, 40) || "Controller"} connected</span>`);
 });
-UI.nav = { layer, focused: () => cur, move: direction, activate, tick: () => tick(performance.now()) };   // for tests
+UI.nav = { layer, focused: () => cur, move: direction, activate, tick: () => tick(performance.now()), set: e => { setNav(true); focus(e); } };   // for tests
 })();

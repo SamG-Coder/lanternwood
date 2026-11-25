@@ -1018,7 +1018,9 @@ function resize() {
   canvas.style.width = innerWidth + "px"; canvas.style.height = innerHeight + "px";
   // the whole-number scale that keeps the picture closest to its designed height (never much
   // shorter, so the sky and the road both stay in view), then a virtual size that fills the window
-  const k = Math.max(1, Math.min(Math.floor(canvas.height / (CAM.vh * 0.86)), Math.floor(canvas.width / (CAM.vw * 0.75))));
+  let kh = Math.max(1, Math.round(canvas.height / CAM.vh));
+  if (kh > 1 && canvas.height / kh < CAM.vh * 0.86) kh--;
+  const k = Math.max(1, Math.min(kh, Math.floor(canvas.width / (CAM.vw * 0.75))));
   // even width: the centre is a pixel edge. At most 1.2 x the designed height and 1.46 x its width.
   const vw = Math.min(2 * Math.ceil(canvas.width / k / 2), 2 * Math.round(CAM.vw * 0.73)), vh = Math.min(Math.ceil(canvas.height / k), Math.round(CAM.vh * 1.2));
   st.scale = k;
@@ -1038,14 +1040,13 @@ function fireflies(now, sun) {
     for (let i = 0; i < 6; i++) {
       const tt = now * 0.0006 + i * 1.1;
       out.push([gateX[si] + Math.sin(tt + i) * 1.4, 0.8 + Math.abs(Math.sin(tt * 0.8 + i)) * 2.2, D_ROAD + Math.cos(tt * 0.7 + i * 2) * 1.6,
-                0.6 + 0.4 * Math.max(0, Math.sin(now * 0.003 + i))]);
+                (0.6 + 0.4 * Math.max(0, Math.sin(now * 0.003 + i))) * (0.35 + 0.65 * sun.night)]);
     }
-    return out;
   }
   const reg = world.regions[Math.max(st.region, 0)];
   const amount = (reg ? reg.fireflies : 0) * sun.night;
   if (amount < 0.05) return out;
-  for (let i = 0; i < FF_N; i++) {
+  for (let i = out.length; i < FF_N; i++) {
     const t = now * 0.0004 + i * 1.7;
     const x = st.camX + Math.sin(t * 0.7 + i) * 14 + (i - 3.5) * 3;
     const d = 11 + ((i * 3.7) % 9) + Math.sin(t * 1.3) * 1.5;

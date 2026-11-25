@@ -262,7 +262,7 @@ function roadHtml(ch) {
       <div class="gs">${ready ? (road.here ? `Everything is ready. ${UI.glyph ? UI.glyph("interact") : "<kbd>E</kbd>"} to mend it.` : `Everything is ready. It lies ${dist > 0 ? dist + " m ahead" : "behind you"}.`)
         : `Gather and craft what it needs, then come back to it${dist > 3 ? ` (${dist} m ahead)` : ""}.`}</div></div>`;
   }
-  const buffs = Object.keys(D.EFFECTS).filter(k => ch.buffs && ch.buffs[k] > now);
+  const buffs = Object.keys(D.EFFECTS).filter(k => S.buffActive(ch, now, k));
   const jobs = ch.jobs.map(id => D.jobById(id)).filter(Boolean).map(j => {
     const have = S.count(ch, j.item), held = S.owned(ch, j.item) > have;
     return `<div class="job">${iconImg(j.item)}<div><div class="jf">${esc(j.from)}</div><div class="jn">${j.n} × ${esc(D.ITEMS[j.item].name)} <span style="color:${have >= j.n ? "#a8d08a" : "var(--ink-3)"};font-size:12px">(${Math.min(have, j.n)}/${j.n})</span></div>
@@ -408,7 +408,7 @@ let lastPrompt = "", lastBusy = null, buffT = 0, lastBuffs = "";
 const buffBar = el("div"); buffBar.id = "rpg-buffs"; buffBar.className = "hud"; document.body.appendChild(buffBar);
 function drawBuffs() {
   const ch = window.Game && Game.character(), now = Date.now();
-  const list = ch && ch.buffs ? Object.keys(D.EFFECTS).filter(k => ch.buffs[k] > now) : [];
+  const list = ch ? Object.keys(D.EFFECTS).filter(k => S.buffActive(ch, now, k)) : [];
   const html = list.map(k => `<span class="buff" title="${esc(D.EFFECTS[k].name)}">${iconImg(potionFor(k))}${mmss(ch.buffs[k] - now)}</span>`).join("");
   if (html !== lastBuffs) { buffBar.innerHTML = html; lastBuffs = html; }
   if (journalOpen() && tab === "road") journal.querySelectorAll("[data-buff]").forEach(b => { if (ch.buffs[b.dataset.buff] > now) b.textContent = mmss(ch.buffs[b.dataset.buff] - now); });

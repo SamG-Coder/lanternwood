@@ -8,8 +8,9 @@
 // action's length fixed when it began), lookupNode(key) -> {species, region, x, d} | null }. When
 // these are given, gathering checks reach and duration too; with lookupNode the node's identity
 // comes from the authority's own world data and the command's species / region are ignored.
-// lookupGate(id) -> {x} | null lets "repair" check the player stands at the obstacle. lookupNode may
-// also give ri (the node's region index): a region the road hasn't opened yet can't be gathered.
+// lookupGate(id) -> {x} | null lets "repair" check the player stands at the obstacle. lookupNode
+// should also give ri (the node's region index): a region the road hasn't opened yet can't be
+// gathered. A server must give it; without ri the region lock is not checked.
 (function (root) {
 "use strict";
 const D = root.LWData || (typeof require !== "undefined" ? require("./data.js") : null);
@@ -127,13 +128,17 @@ const totalLevel = ch => Object.keys(D.SKILLS).reduce((s, k) => s + level(ch, k)
 const count = (ch, id) => ch.inv.reduce((s, it) => s + (it && it.id === id ? it.n : 0), 0);
 const spaceFor = (ch, id, n) => fitsAll(ch.inv, [[id, n]]);
 function toolSpeed(ch, skill) { const d = itemDef(ch.tools[skill]); return d && d.speed ? d.speed : 1.0; }
+// is an effect at work now? (an end further off than the effect lasts is a forged one: not at work)
+function buffActive(ch, now, k) {
+  return !!(ch.buffs && hasOwn(D.EFFECTS, k) && hasOwn(ch.buffs, k) && ch.buffs[k] > now && ch.buffs[k] - now <= D.EFFECTS[k].secs * 1000 + 1000);
+}
 // the strongest active potion effect of one kind (gather, xp, curio, move, jump); 1 when none
 function buffOf(ch, now, key) {
   let m = 1;
   if (!ch.buffs) return m;
   for (const k in D.EFFECTS) {
     const e = D.EFFECTS[k];
-    if (e[key] && hasOwn(ch.buffs, k) && ch.buffs[k] > now && ch.buffs[k] - now <= e.secs * 1000 + 1000) m = Math.max(m, e[key]);
+    if (e[key] && buffActive(ch, now, k)) m = Math.max(m, e[key]);
   }
   return m;
 }
@@ -354,6 +359,6 @@ function actUnsafe(ch, cmd, ctx) {
 }
 
 const api = { SAVE_VERSION, INV_SLOTS, STACK, REPAIR_TIME, GATE_REACH, newCharacter, load, act, level, totalLevel, count, spaceFor, roomForNode, nodeMap,
-              gatherTime, nodeState, toolSpeed, agilityBonus, canCraft, buffOf, stage, owned, missingFor };
+              gatherTime, nodeState, toolSpeed, agilityBonus, canCraft, buffOf, buffActive, stage, owned, missingFor };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.LWState = api;
 })(typeof self !== "undefined" ? self : this);
