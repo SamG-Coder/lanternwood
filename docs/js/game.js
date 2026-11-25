@@ -688,7 +688,7 @@ try {
       localStorage.setItem(SAVE_KEY + ".unreadable." + Date.now(), raw);
   }
 } catch (e) { ch = null; }
-if (ch && ch.world !== WORLD_SIG) { ch.nodes = {}; ch.world = WORLD_SIG; }
+if (ch && ch.world !== WORLD_SIG) { ch.nodes = LWState.nodeMap(); ch.world = WORLD_SIG; }
 function save() {
   if (!ch || saveBlocked) return;
   ch.pos = { x: +st.x.toFixed(2), d: +st.d.toFixed(2) }; ch.time = +st.time.toFixed(3); ch.world = WORLD_SIG;

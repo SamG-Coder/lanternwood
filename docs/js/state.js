@@ -21,6 +21,10 @@ const num = (v, lo, hi, dflt) => { const n = +v; return Number.isFinite(n) ? Mat
 const REACH_X = 2.6, REACH_D = 5.0;   // generous: the client's own reach is smaller
 const isKey = k => typeof k === "string" && /^[A-Za-z0-9_.,:@-]{1,64}$/.test(k) && k !== "__proto__" && k !== "constructor" && k !== "prototype";
 const nodeMap = () => Object.create(null);
+// the fastest a gather can ever be (top level, best tool): a duration a caller supplies is never
+// trusted below this, so a client can't claim a zero-second gather
+const BEST_TOOL = Math.max(1, ...Object.values(D.ITEMS).filter(i => i.kind === "tool").map(i => i.speed || 1));
+const minGatherTime = node => node.time * 0.5 / BEST_TOOL;
 
 function newCharacter(name, look, now) {
   const ch = {
@@ -155,7 +159,7 @@ function actUnsafe(ch, cmd, ctx) {
       if (!node) return fail("Nothing to gather here");
       if (ctx.player && at && (Math.abs(ctx.player.x - at.x) > REACH_X || Math.abs(ctx.player.d - at.d) > REACH_D)) return fail("Too far away");
       if (level(ch, node.skill) < node.req) return fail(`Needs ${D.SKILLS[node.skill].name} ${node.req}`);
-      if (tooSoon(num(ctx.duration, 0, 60, gatherTime(ch, node)))) return fail("Not so fast");
+      if (tooSoon(Math.max(minGatherTime(node), num(ctx.duration, 0, 60, gatherTime(ch, node))))) return fail("Not so fast");
       const st = nodeState(ch, cmd.key, node, now);
       if (!st.ready) return fail("It needs time to grow back");
       const got = [];
@@ -243,7 +247,7 @@ function actUnsafe(ch, cmd, ctx) {
   return fail("Unknown action");
 }
 
-const api = { SAVE_VERSION, INV_SLOTS, STACK, newCharacter, load, act, level, totalLevel, count, spaceFor, roomForNode,
+const api = { SAVE_VERSION, INV_SLOTS, STACK, newCharacter, load, act, level, totalLevel, count, spaceFor, roomForNode, nodeMap,
               gatherTime, nodeState, toolSpeed, agilityBonus, canCraft };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.LWState = api;
 })(typeof self !== "undefined" ? self : this);

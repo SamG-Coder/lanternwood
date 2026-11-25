@@ -184,5 +184,13 @@ ok(!S.roomForNode(full(0), D.NODES.Field_Poppy) && S.roomForNode(full(1), D.NODE
   ok(e.some(x => x.t === "item"), "duration from the start of the action is honoured");
 }
 
+// third review: a caller-supplied duration can't go below the fastest possible gather
+{
+  const c = S.newCharacter("Z", {}, t);
+  ok(S.act(c, { t: "gather", key: "z1", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, startedAt: t, duration: 0 })[0].t === "error", "duration 0 refused");
+  const fastest = D.NODES.Field_Poppy.time * 0.5 / 1.3;
+  ok(S.act(c, { t: "gather", key: "z2", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, startedAt: t - fastest * 1000, duration: 0 }).some(e => e.t === "item"), "the fastest real gather still passes");
+  ok(Object.getPrototypeOf(S.nodeMap()) === null, "nodeMap has no prototype");
+}
 console.log(fails ? `${fails} failed` : "all state checks passed");
 process.exit(fails ? 1 : 0);
