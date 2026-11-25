@@ -226,12 +226,12 @@ function render() {
         <div class="dk">${D.ITEMS[it.id].kind}</div><div class="dd">${esc(D.ITEMS[it.id].desc)}</div>
         ${D.ITEMS[it.id].kind === "potion" ? '<button class="btn" data-do="use">Use</button>' : ""}
         ${D.ITEMS[it.id].slot || D.ITEMS[it.id].tool ? '<button class="btn" data-do="equip">Equip</button>' : ""}
-        <button class="btn ghost" data-do="drop">Drop</button></div>` : '<div class="dd" style="align-self:center">Select an item to see what it is.</div>'}</div>`;
+        <button class="btn ghost" data-do="drop">${dropArm === selSlot && it.n > 1 ? `Drop all ${it.n}?` : "Drop"}</button></div>` : '<div class="dd" style="align-self:center">Select an item to see what it is.</div>'}</div>`;
     body.querySelectorAll(".cell").forEach(c => c.addEventListener("click", () => { selSlot = ch.inv[+c.dataset.i] ? +c.dataset.i : -1; dropArm = -1; render(); }));
     body.querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", () => {
       const it2 = ch.inv[selSlot];
       // dropping a whole stack asks twice
-      if (b.dataset.do === "drop" && it2 && it2.n > 1 && dropArm !== selSlot) { dropArm = selSlot; b.textContent = `Drop all ${it2.n}?`; return; }
+      if (b.dataset.do === "drop" && it2 && it2.n > 1 && dropArm !== selSlot) { dropArm = selSlot; render(); return; }
       dropArm = -1;
       Game.dispatch({ t: b.dataset.do, slot: selSlot });
       if (!Game.character().inv[selSlot]) selSlot = -1;

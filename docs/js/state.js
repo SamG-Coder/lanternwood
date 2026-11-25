@@ -4,8 +4,10 @@
 //
 // Commands are untrusted input: every field is checked, and act() never throws (a bad command
 // returns an error event). ctx carries what only the caller knows: { now (ms), rng, player:{x,d},
-// at:{x,d} (the node's position), startedAt (ms, when the gather or craft began) }. When player/at
-// or startedAt are given, gathering checks reach and duration too.
+// at:{x,d} (the node's position), startedAt (ms, when the gather or craft began), duration (s, the
+// action's length fixed when it began), lookupNode(key) -> {species, region, x, d} | null }. When
+// these are given, gathering checks reach and duration too; with lookupNode the node's identity
+// comes from the authority's own world data and the command's species / region are ignored.
 (function (root) {
 "use strict";
 const D = root.LWData || (typeof require !== "undefined" ? require("./data.js") : null);
@@ -17,6 +19,8 @@ const TOOL_SKILLS = Object.keys(D.SKILLS).filter(k => D.SKILLS[k].kind === "gath
 const isSlot = s => Number.isInteger(s) && s >= 0 && s < INV_SLOTS;
 const num = (v, lo, hi, dflt) => { const n = +v; return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt; };
 const REACH_X = 2.6, REACH_D = 5.0;   // generous: the client's own reach is smaller
+const isKey = k => typeof k === "string" && /^[A-Za-z0-9_.,:@-]{1,64}$/.test(k) && k !== "__proto__" && k !== "constructor" && k !== "prototype";
+const nodeMap = () => Object.create(null);
 
 function newCharacter(name, look, now) {
   const ch = {
@@ -24,7 +28,7 @@ function newCharacter(name, look, now) {
     created: now, skills: {}, inv: new Array(INV_SLOTS).fill(null),
     equip: { main: null, off: null, trinket: null },
     tools: Object.fromEntries(TOOL_SKILLS.map(k => [k, null])),   // crafted upgrades; worn tools are built in
-    nodes: {},                                                    // node key -> { uses, at, readyAt }
+    nodes: nodeMap(),                                             // node key -> { uses, at, readyAt }
     world: "", pos: { x: 6, d: 14 }, time: 8.5,
     stats: { gathered: 0, crafted: 0, metres: 0, jumps: 0, agiCarry: 0 },
   };
@@ -54,7 +58,7 @@ function load(json) {
   for (const s of EQUIP_SLOTS) { const id = raw.equip && raw.equip[s], d = itemDef(id); ch.equip[s] = d && d.slot === s ? id : null; }
   for (const k of TOOL_SKILLS) { const id = raw.tools && raw.tools[k], d = itemDef(id); ch.tools[k] = d && d.tool === k ? id : null; }
   if (raw.nodes && typeof raw.nodes === "object") for (const [key, s] of Object.entries(raw.nodes)) {
-    if (typeof key !== "string" || key.length > 64 || !s || typeof s !== "object") continue;
+    if (!isKey(key) || !s || typeof s !== "object") continue;
     const e = { uses: Math.floor(num(s.uses, 0, 99, 0)) };
     if (s.at != null) e.at = num(s.at, 0, 1e15, 0);
     if (s.readyAt != null) e.readyAt = num(s.readyAt, 0, 1e15, 0);
@@ -104,7 +108,7 @@ function gatherTime(ch, node) {
 }
 // a node's state now: spent nodes regrow after `respawn`; partly used ones recover their uses too
 function nodeState(ch, key, node, now) {
-  const s = hasOwn(ch.nodes, key) ? ch.nodes[key] : null;
+  const s = isKey(key) && hasOwn(ch.nodes, key) ? ch.nodes[key] : null;
   if (!s) return { uses: node.uses, ready: true };
   if (s.readyAt ? now >= s.readyAt : now - (s.at || 0) >= node.respawn * 1000) { delete ch.nodes[key]; return { uses: node.uses, ready: true }; }
   return { uses: s.uses, ready: !s.readyAt, readyAt: s.readyAt };
@@ -140,12 +144,18 @@ function actUnsafe(ch, cmd, ctx) {
   const tooSoon = (sec) => ctx.startedAt != null && now - ctx.startedAt < sec * 1000 * 0.9;
   switch (cmd.t) {
     case "gather": {
-      if (typeof cmd.key !== "string" || cmd.key.length > 64) return fail("Nothing to gather here");
-      const node = D.nodeFor(cmd.species, cmd.region);
+      if (!isKey(cmd.key)) return fail("Nothing to gather here");
+      let species = cmd.species, region = cmd.region, at = ctx.at;
+      if (typeof ctx.lookupNode === "function") {          // the authority knows what stands at that key
+        const w = ctx.lookupNode(cmd.key);
+        if (!w) return fail("Nothing to gather here");
+        species = w.species; region = w.region; at = { x: w.x, d: w.d };
+      }
+      const node = D.nodeFor(species, region);
       if (!node) return fail("Nothing to gather here");
-      if (ctx.player && ctx.at && (Math.abs(ctx.player.x - ctx.at.x) > REACH_X || Math.abs(ctx.player.d - ctx.at.d) > REACH_D)) return fail("Too far away");
+      if (ctx.player && at && (Math.abs(ctx.player.x - at.x) > REACH_X || Math.abs(ctx.player.d - at.d) > REACH_D)) return fail("Too far away");
       if (level(ch, node.skill) < node.req) return fail(`Needs ${D.SKILLS[node.skill].name} ${node.req}`);
-      if (tooSoon(gatherTime(ch, node))) return fail("Not so fast");
+      if (tooSoon(num(ctx.duration, 0, 60, gatherTime(ch, node)))) return fail("Not so fast");
       const st = nodeState(ch, cmd.key, node, now);
       if (!st.ready) return fail("It needs time to grow back");
       const got = [];

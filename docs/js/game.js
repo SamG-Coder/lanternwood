@@ -600,6 +600,9 @@ const objects = world.objects.map((o, i) => {
            node: LWData.nodeFor(species, region), key: `${o.v}@${o.x.toFixed(1)},${o.d.toFixed(1)}`, hidden: false };
 });
 const nodeObjects = objects.filter(o => o.node && o.x > -2 && o.x < LEN + 2 && o.d > PATH[0] - 4.5 && o.d < PATH[1] + 4.5);
+// the world's own record of every node, by key (what a server would look up; commands can't forge it)
+const nodeByKey = new Map(nodeObjects.map(o => [o.key, o]));
+const lookupNode = key => { const o = nodeByKey.get(key); return o ? { species: o.species, region: o.region, x: o.x, d: o.d } : null; };
 const sprites = new Map();   // file -> {tex, meta, state}
 function spriteFor(o) {
   const v = catalog.variants[o.v];
@@ -681,7 +684,8 @@ try {
   if (raw) {
     ch = LWState.load(raw);
     // a save that can't be read is kept aside (never deleted) and the walk starts fresh
-    if (!ch) localStorage.setItem(SAVE_KEY + ".unreadable." + Date.now(), raw);
+    if (!ch && !Object.keys(localStorage).some(k => k.startsWith(SAVE_KEY + ".unreadable.") && localStorage.getItem(k) === raw))
+      localStorage.setItem(SAVE_KEY + ".unreadable." + Date.now(), raw);
   }
 } catch (e) { ch = null; }
 if (ch && ch.world !== WORLD_SIG) { ch.nodes = {}; ch.world = WORLD_SIG; }
@@ -740,7 +744,11 @@ window.Game = {
     rebuildPlayer(true); save(); emit([{ t: "created" }]);
   },
   setLook(look) { if (!ch) return; ch.look = look; rebuildPlayer(); save(); emit([{ t: "look" }]); },
-  dispatch: cmd => dispatch(cmd),
+  dispatch: cmd => {
+    // gear and bag changes wait until the current gather or craft is done
+    if (st.action && cmd && ["equip", "unequip", "drop", "use"].includes(cmd.t)) { emit([{ t: "error", why: "Finish what you're doing first" }]); return []; }
+    return dispatch(cmd);
+  },
   choices: () => st.choices,
   craft(id) {
     const r = LWData.RECIPES.find(x => x.id === id);
@@ -828,8 +836,8 @@ function update(dt) {
     a.t += dt;
     if (a.t >= a.dur) {
       st.action = null;
-      if (a.kind === "gather") dispatch({ t: "gather", key: a.o.key, species: a.o.species, region: a.o.region },
-                                        { player: { x: st.x, d: st.d }, at: { x: a.o.x, d: a.o.d }, startedAt: a.startedAt });
+      if (a.kind === "gather") dispatch({ t: "gather", key: a.o.key },
+                                        { player: { x: st.x, d: st.d }, lookupNode, startedAt: a.startedAt, duration: a.dur });
       else if (a.kind === "craft") dispatch({ t: "craft", id: a.recipe.id }, { startedAt: a.startedAt });
     }
   }

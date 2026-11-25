@@ -153,5 +153,36 @@ const full = (keepFree) => { const c = S.newCharacter("F", {}, t); c.inv = c.inv
 // roomForNode: pre-check before starting a gather
 ok(!S.roomForNode(full(0), D.NODES.Field_Poppy) && S.roomForNode(full(1), D.NODES.Field_Poppy), "roomForNode");
 
+
+// ---- cases from the second review (366d970)
+// S4: "__proto__" and other non-keys never become node state
+{
+  const c = S.newCharacter("P", {}, t);
+  for (const key of ["__proto__", "constructor", "prototype", "", "x".repeat(65), "a b", 7, null]) {
+    const e = S.act(c, { t: "gather", key, species: "Field_Poppy", region: "Hearthmeadow" }, { now: t });
+    ok(e[0].t === "error", "S4b: key " + JSON.stringify(key) + " refused");
+  }
+  ok(Object.getPrototypeOf(c.nodes) === null && Object.keys(c.nodes).length === 0, "S4b: node map untouched, no prototype");
+  const evil = JSON.parse(JSON.stringify(c)); evil.nodes = JSON.parse('{"__proto__": {"uses": 0}, "ok.key": {"uses": 1, "at": 5}}');
+  const r = S.load(JSON.stringify(evil));
+  ok(r && Object.getPrototypeOf(r.nodes) === null && !Object.keys(r.nodes).includes("__proto__") && r.nodes["ok.key"], "S4b: load drops __proto__ node keys");
+}
+// S6: with lookupNode the authority decides what a key is; forged keys and species do nothing
+{
+  const world = { "poppy@1": { species: "Field_Poppy", region: "Hearthmeadow", x: 0, d: 14 } };
+  const lookupNode = k => world[k] || null;
+  const c = S.newCharacter("W", {}, t);
+  ok(S.act(c, { t: "gather", key: "made-up-1", species: "Field_Poppy" }, { now: t, lookupNode })[0].t === "error", "S6b: unknown key refused");
+  ok(S.act(c, { t: "gather", key: "poppy@1", species: "Tree_English_Oak", region: "x" }, { now: t, lookupNode, player: { x: 0, d: 14 } }).some(e => e.t === "item" && e.id === "poppy"),
+     "S6b: the world's species wins over the command's");
+  ok(S.act(c, { t: "gather", key: "poppy@1" }, { now: t, lookupNode, player: { x: 50, d: 14 } })[0].t === "error", "S6b: reach measured from the world's position");
+}
+// the duration fixed at the start of an action is what's checked (a tool swap mid-gather can't waste it)
+{
+  const c = S.newCharacter("D", {}, t);
+  const e = S.act(c, { t: "gather", key: "dd", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, startedAt: t - 1600, duration: 1.7 });
+  ok(e.some(x => x.t === "item"), "duration from the start of the action is honoured");
+}
+
 console.log(fails ? `${fails} failed` : "all state checks passed");
 process.exit(fails ? 1 : 0);
