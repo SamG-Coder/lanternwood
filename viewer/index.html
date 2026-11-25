@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RayTraced2d — SmartImposter pixel trees</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0c12; color: #cfd3dc; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  canvas { display: block; image-rendering: pixelated; cursor: crosshair; }
+  #wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #ui { position: absolute; top: 10px; left: 10px; background: rgba(12, 14, 22, 0.86); padding: 10px 12px; border-radius: 8px;
+        width: 250px; box-shadow: 0 4px 18px rgba(0,0,0,0.4); }
+  #ui h1 { font-size: 13px; margin: 0 0 6px; color: #fff; }
+  #ui label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 3px 0; }
+  #ui input[type=range] { width: 120px; }
+  #ui .row { display: flex; gap: 4px; margin: 6px 0; flex-wrap: wrap; }
+  #ui button { background: #263049; color: #dde; border: 1px solid #3a4666; border-radius: 4px; padding: 3px 7px; cursor: pointer; font-size: 12px; }
+  #ui button.on { background: #4a6bd6; border-color: #6d8cf0; color: #fff; }
+  #ui .hint { color: #8a90a0; font-size: 11px; margin-top: 6px; }
+  #ui summary { cursor: pointer; color: #aab; margin-top: 4px; }
+  #stats { position: absolute; bottom: 8px; right: 10px; color: #667; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="ui">
+  <h1>Pixel trees · 2D ray-traced light</h1>
+  <div class="row" id="presets">
+    <button data-p="morning">Morning</button><button data-p="noon">Noon</button><button data-p="sunset">Sunset</button><button data-p="night">Night</button>
+  </div>
+  <label>Sun angle <input id="sunA" type="range" min="0" max="180" value="40"></label>
+  <label>Sun depth <input id="sunZ" type="range" min="-100" max="100" value="35"></label>
+  <label>Sun power <input id="sunI" type="range" min="0" max="400" value="260"></label>
+  <label>Torch <input id="torch" type="checkbox"></label>
+  <label>Torch power <input id="torchI" type="range" min="0" max="2000" value="900"></label>
+  <label>Wind <input id="wind" type="range" min="0" max="30" value="10"></label>
+  <label>Leaf flutter <input id="flutter" type="range" min="0" max="20" value="10"></label>
+  <label>Wind from the right <input id="windDir" type="checkbox"></label>
+  <label>Look <select id="look"><option value="1" selected>Banded light</option><option value="0">Raw lighting</option><option value="2">Palette ramp</option></select></label>
+  <details>
+    <summary>Pixel-art style</summary>
+    <label>Bands <input id="bands" type="range" min="3" max="9" value="5"></label>
+    <label>Exposure <input id="expo" type="range" min="40" max="200" value="100"></label>
+    <label>Despeckle <input id="clean" type="checkbox" checked></label>
+    <label>Outline <input id="outline" type="checkbox" checked></label>
+    <label>Dither <input id="dither" type="checkbox"></label>
+
+    <label>Depth haze <input id="haze" type="range" min="0" max="40" value="10"></label>
+    <label>Shadow density <input id="sigma" type="range" min="0" max="80" value="22"></label>
+    <label>Pixel scale <input id="scale" type="range" min="2" max="8" value="4"></label>
+  </details>
+  <div class="hint">Drag on the scene to move the torch (or the sun when the torch is off). Mouse wheel: torch depth (in front of / behind the trees).</div>
+</div>
+<div id="stats"></div>
+
+<script>
+"use strict";
+const VW = 384, VH = 216, GROUND = 34;
+// The ground strip is a receding plane (oblique view): world (x, h, z) -> screen (x, h + yg(z)).
+// Row GROUND-1 is far (z = -54), the bottom row near (z = +80). Trees stand at yg(their z).
+const YG0 = GROUND - 14, ZPX = 4;
+const yg = z => YG0 - z / ZPX;
+
+// ---------------------------------------------------------------- GL setup
+const canvas = document.getElementById("c");
+const gl = canvas.getContext("webgl2", { antialias: false, premultipliedAlpha: false });
+if (!gl) document.body.innerHTML = "<p style='padding:20px'>WebGL2 is required.</p>";
+if (!gl.getExtension("EXT_color_buffer_float")) console.warn("EXT_color_buffer_float missing");
+
+function sh(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) + "\n" + src.split("\n").map((l, i) => (i + 1) + ": " + l).join("\n"));
+  return s;
+}
+function prog(fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); u[info.name.replace(/\[0\]$/, "")] = gl.getUniformLocation(p, info.name); }
+  return { p, u };
+}
+function tex(w, h, internal, format, type, data, filter) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, data || null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter || gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter || gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+// a quad in virtual pixel space: u_rect = (x0, y0, x1, y1), y up from the bottom of the scene
+const VS = `#version 300 es
+uniform vec4 u_rect; uniform vec2 u_view;
+const vec2 Q[6] = vec2[6](vec2(0,0), vec2(1,0), vec2(0,1), vec2(0,1), vec2(1,0), vec2(1,1));
+void main() { vec2 p = mix(u_rect.xy, u_rect.zw, Q[gl_VertexID]); gl_Position = vec4(p / u_view * 2.0 - 1.0, 0, 1); }`;
+
+const COMMON = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2D;
+float yg(float z) { return ${YG0}.0 - z / ${ZPX}.0; }
+const vec3 LUM = vec3(0.2126, 0.7152, 0.0722);
+float lum(vec3 c) { return dot(c, LUM); }
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+`;
+
+// ---- G-buffer: sprite pass. G0 albedo(lin) + coverage, G1 normal + spread, G2 zfront zback ao sky, G3 material base + leaf (-1 = ground)
+const GB_OUT = `
+layout(location=0) out vec4 g0; layout(location=1) out vec4 g1; layout(location=2) out vec4 g2; layout(location=3) out vec4 g3;`;
+const FS_SPRITE = COMMON + GB_OUT + `
+uniform sampler2D t_alb, t_nrm, t_dat, t_mat;
+uniform vec2 u_origin; uniform vec2 u_size; uniform float u_zscale, u_drange, u_zplace, u_flip;
+uniform vec3 u_leafBase, u_barkBase;
+// wind: u_bend = sideways offset of the crown top in pixels (lean + sway, world +x), u_flutter =
+// leaf flutter amplitude in pixels, u_base = the sprite row the trunk stands on
+uniform float u_bend, u_flutter, u_base, u_time, u_phase;
+
+ivec2 texelOf(ivec2 lp) {                          // world-oriented local pixel -> texel
+  if (u_flip > 0.5) lp.x = int(u_size.x) - 1 - lp.x;
+  return ivec2(lp.x, int(u_size.y) - 1 - lp.y);
+}
+bool inside(ivec2 lp) { return lp.x >= 0 && lp.y >= 0 && float(lp.x) < u_size.x && float(lp.y) < u_size.y; }
+
+void main() {
+  ivec2 lp = ivec2(floor(gl_FragCoord.xy - u_origin));
+  // Wind, as an inverse map (which texel lands on this pixel). The trunk bends as a cantilever,
+  // offset ~ height^2, and snaps to whole pixels: the tree steps a pixel at a time, like
+  // hand-animated pixel art, and every map (normal, depth, ...) moves with it, so the lighting
+  // and the cast shadows follow the sway.
+  float hs = max(u_size.y - u_base, 1.0);
+  float h = clamp((float(lp.y) - u_base) / hs, 0.0, 1.0);
+  float bend = u_bend * h * h;
+  // Horizontal moves only: a vertical shift repeats or drops whole rows (visible lines). And
+  // where the bend steps a pixel, the step must not run along a straight row (a tear that rolls
+  // up and down like a scan line while the tree sways): each 3x3 leaf clump gets its own
+  // threshold, so the boundary is ragged and clumps step one by one.
+  ivec2 cell = ivec2(floor(vec2(lp) / 3.0));
+  float jit = hash(vec2(cell) + u_phase) - 0.5;
+  ivec2 srcPlain = ivec2(lp.x - int(floor(bend + 0.5)), lp.y);
+  ivec2 src = ivec2(lp.x - int(floor(bend + 0.5 + jit * 0.9)), lp.y);
+  // leaf flutter: +-1 px sideways from a field smooth over a whole clump, with curved boundaries
+  vec2 q = vec2(cell) * 3.0;
+  float t = u_time;
+  float fx = sin(q.x * 0.21 + 1.7 * sin(q.y * 0.15 + u_phase) + t * 3.1 + u_phase) * sin(q.y * 0.13 + q.x * 0.07 - t * 1.9);
+  float amp = u_flutter * smoothstep(0.25, 0.7, h);
+  int fl = int(floor(fx * amp + 0.5 + jit * 0.5));
+  ivec2 tp;
+  vec4 a = vec4(0);
+  bool ok = false;
+  ivec2 cand = src - ivec2(fl, 0);
+  if (inside(cand)) {
+    tp = texelOf(cand);
+    a = texelFetch(t_alb, tp, 0);
+    ok = a.a > 0.5 && texelFetch(t_mat, tp, 0).g > 0.5;   // leaves move with the clump
+  }
+  if (!ok) {
+    // bark (and anything not a leaf) follows the plain bend: trunks stay clean
+    if (!inside(srcPlain)) discard;
+    tp = texelOf(srcPlain);
+    a = texelFetch(t_alb, tp, 0);
+    if (a.a > 0.5 && texelFetch(t_mat, tp, 0).g > 0.5) {
+      // a leaf here that moved elsewhere: keep it unless it moved off the crown edge
+      if (!inside(cand) || texelFetch(t_alb, texelOf(cand), 0).a < 0.5) {
+        if (fl != 0) discard;
+      }
+    }
+  }
+  if (a.a < 0.5) discard;
+  vec4 n = texelFetch(t_nrm, tp, 0), d = texelFetch(t_dat, tp, 0), m = texelFetch(t_mat, tp, 0);
+  vec3 nn = normalize(n.xyz * 2.0 - 1.0); if (u_flip > 0.5) nn.x = -nn.x;
+  // the bent crown leans its surface with it (slope of the cantilever)
+  nn = normalize(nn + vec3(2.0 * u_bend * h / hs, 0.0, 0.0) * nn.y);
+  float zf = (d.r - 0.5) * 2.0 * u_drange * u_zscale + u_zplace;
+  float zb = (d.g - 0.5) * 2.0 * u_drange * u_zscale + u_zplace;
+  float leaf = m.g;
+  g0 = vec4(pow(a.rgb, vec3(2.2)), max(m.r, 0.05));
+  g1 = vec4(nn, n.a);
+  g2 = vec4(zf, min(zb, zf - 0.5), d.b, d.a);
+  g3 = vec4(leaf > 0.5 ? u_leafBase : u_barkBase, leaf);
+}`;
+const FS_GROUND = COMMON + GB_OUT + `
+uniform float u_ground;
+void main() {
+  vec2 p = floor(gl_FragCoord.xy);
+  if (p.y >= u_ground) discard;
+  float z = (${YG0}.0 - (p.y + 0.5)) * ${ZPX}.0;   // depth of this row of the ground plane
+  float h = hash(p), h2 = hash(floor(vec2(p.x / 6.0, p.y / 2.0)) + 3.1);
+  // grass with darker tufts and a few dry patches
+  vec3 base = vec3(0.075, 0.115, 0.028);
+  vec3 alb = base * (0.8 + 0.35 * h) * (h2 > 0.82 ? vec3(1.35, 1.1, 1.2) : vec3(1.0));
+  if (fract(p.x * 0.13 + p.y * 0.7) < 0.06 && h > 0.6) alb *= 0.6;
+  vec3 n = normalize(vec3((h - 0.5) * 0.3, 1.0, (h2 - 0.5) * 0.3));
+  g0 = vec4(alb, 1.0);
+  g1 = vec4(n, 0.85);
+  g2 = vec4(z, z, 1.0, 1.0);
+  g3 = vec4(base, -1.0);
+}`;
+
+// ---- Lighting: per virtual pixel, march toward every light through the depth slabs of the scene
+const FS_LIGHT = COMMON + `
+uniform sampler2D g0t, g1t, g2t, g3t;
+uniform vec3 u_sunDir, u_sunCol, u_sky, u_bounce;
+uniform int u_nPoint; uniform vec3 u_pPos[4]; uniform vec3 u_pCol[4]; uniform float u_pRad[4];
+uniform float u_sigma, u_expo, u_ground;
+out vec4 o;
+const vec3 TRANS = vec3(0.9, 1.0, 0.35);
+
+// transmittance from world point p = (x, height, z) toward direction L (maxT: distance to a point light)
+float shadow(vec3 p, vec3 L, float maxT) {
+  float lxy = max(length(L.xy), 1e-3);
+  float tau = 0.0, t = 0.0;
+  for (int i = 0; i < 180; i++) {
+    float step = (1.0 + float(i) / 40.0) / max(lxy, abs(L.z) * 0.3 + 1e-3);
+    t += step;
+    if (t > maxT) break;
+    vec3 q = p + L * t;
+    if (q.y < 0.0) return 0.0;                     // into the ground
+    vec2 sp = vec2(q.x, q.y + yg(q.z));            // where that point is on screen
+    if (sp.x < 0.0 || sp.x >= ${VW}.0 || sp.y >= ${VH}.0) break;
+    if (sp.y < 0.0) continue;
+    ivec2 ip = ivec2(floor(sp));
+    float cov = texelFetch(g0t, ip, 0).a;
+    if (cov <= 0.0 || texelFetch(g3t, ip, 0).a < -0.5) continue;
+    vec4 z = texelFetch(g2t, ip, 0);
+    if (q.z <= z.x && q.z >= z.y) tau += cov * u_sigma * step;
+    if (tau > 6.0) return 0.0;
+  }
+  return exp(-tau);
+}
+
+// Light through the leaves toward the viewer: how much reaches a pixel is the traced path
+// through the crown (the shadow term); the lobe only says how strongly leaves scatter it
+// forward (sun behind the trees: bright rims) versus sideways.
+float transLobe(vec3 L) { return 0.12 + 0.55 * pow(max(-L.z, 0.0), 1.5); }
+
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  vec4 a = texelFetch(g0t, ip, 0);
+  if (a.a <= 0.0) { o = vec4(0); return; }
+  vec4 nn = texelFetch(g1t, ip, 0), z = texelFetch(g2t, ip, 0), m = texelFetch(g3t, ip, 0);
+  bool ground = m.a < -0.5;
+  float leaf = ground ? 0.0 : m.a;
+  vec3 n = normalize(nn.xyz);
+  vec3 nS = n * mix(1.0, nn.w, leaf);      // shortened by the normal spread (leaves)
+  // world position: ground rows lie on the plane (height 0); a tree pixel is at its front depth,
+  // its height measured from where its slab stands on the ground
+  vec3 P = ground ? vec3(gl_FragCoord.x, 0.05, z.x)
+                  : vec3(gl_FragCoord.x, gl_FragCoord.y - yg(0.5 * (z.x + z.y)), z.x - 0.5);
+  vec3 E = vec3(0), T = vec3(0);
+  if (lum(u_sunCol) > 0.0) {
+    vec3 L = normalize(u_sunDir);
+    float s = shadow(P, L, 1e9);
+    E += u_sunCol * max(dot(nS, L), 0.0) * s;
+    T += u_sunCol * transLobe(L) * pow(s, 1.3);
+  }
+  for (int i = 0; i < 4; i++) {
+    if (i >= u_nPoint) break;
+    vec3 v = u_pPos[i] - P; float d = length(v); vec3 L = v / d;
+    float r = u_pRad[i];
+    float att = 1.0 / (1.0 + (d / r) * (d / r)) * pow(clamp(1.0 - (d / (r * 5.0)) * (d / (r * 5.0)), 0.0, 1.0), 2.0);
+    if (att < 1e-3) continue;
+    float s = shadow(P, L, d);
+    E += u_pCol[i] * max(dot(nS, L), 0.0) * s * att;
+    T += u_pCol[i] * transLobe(L) * pow(s, 1.3) * att;
+  }
+  vec3 amb = (u_sky * z.w * (0.55 + 0.45 * clamp(n.y, 0.0, 1.0)) + u_bounce * clamp(-n.y + 0.3, 0.0, 1.0)) * z.z;
+  vec3 Eall = E + amb;
+  vec3 lit = a.rgb * Eall + a.rgb * TRANS * T * leaf * 2.0;
+  float matL = max(lum(m.rgb), 1e-5);
+  float rel = lum(lit) / matL * pow(max(lum(a.rgb) / matL, 1e-3), -0.5) * u_expo;
+  // colour of all the light arriving (transmitted light included), for the palette tint
+  vec3 Ecol = Eall + TRANS * T * leaf * 2.0;
+  o = vec4(Ecol / max(lum(Ecol), 1e-5), rel);
+}`;
+
+// ---- Final: band, despeckle, palette ramp, outline, sky, upscale
+const FS_FINAL = COMMON + `
+uniform sampler2D g0t, g2t, g3t, lt;
+uniform float u_scale; uniform vec2 u_off;
+uniform int u_bands, u_look; uniform bool u_clean, u_outline, u_dither;
+uniform vec3 u_skyTop, u_skyHor, u_sunScreen, u_sunCol; uniform float u_night, u_ground;
+uniform int u_nPoint; uniform vec3 u_pPos[4]; uniform vec3 u_pCol[4]; uniform vec3 u_haze; uniform float u_hazeAmt;
+out vec4 o;
+const float BAYER[16] = float[16](0.,8.,2.,10.,12.,4.,14.,6.,3.,11.,1.,9.,15.,7.,13.,5.);
+
+float tone(float rel) { return pow(clamp(rel / 1.7, 0.0, 1.0), 0.8); }
+vec3 srgb(vec3 c) { return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2)); }
+// The physically lit colour of a pixel, tone mapped, in sRGB (the "raw" look)
+vec3 rawAt(ivec2 p) {
+  vec4 L = texelFetch(lt, p, 0);
+  vec3 alb = texelFetch(g0t, p, 0).rgb;
+  float matL = max(lum(texelFetch(g3t, p, 0).rgb), 1e-5);
+  vec3 lit = alb * L.rgb * (L.a * matL * pow(max(lum(alb) / matL, 1e-3), 0.5)) / max(lum(alb), 1e-5);
+  return srgb(lit / (1.0 + lit) * 1.4);
+}
+// Steps per stop of brightness for the banded look (Bands slider 3..9 -> 1.5..4.5)
+float spp() { return float(u_bands) * 0.5; }
+int bandAt(ivec2 p) {
+  float d = u_dither ? (BAYER[(p.y & 3) * 4 + (p.x & 3)] / 16.0 - 0.47) * 0.6 : 0.0;
+  if (u_look == 2) {
+    float t = tone(texelFetch(lt, p, 0).a) * float(u_bands - 1) + d;
+    return clamp(int(floor(t + 0.5)), 0, u_bands - 1);
+  }
+  // banded raw: brightness in even perceptual steps (log scale: each band ~ the same ratio)
+  float Y = max(lum(rawAt(p)), 1e-3);
+  return int(floor(log2(Y) * spp() + d + 0.5));
+}
+int matClass(ivec2 p) {
+  if (p.x < 0 || p.y < 0 || p.x >= ${VW} || p.y >= ${VH}) return -1;
+  if (texelFetch(g0t, p, 0).a <= 0.0) return -1;
+  float l = texelFetch(g3t, p, 0).a;
+  return l < -0.5 ? 2 : (l > 0.5 ? 1 : 0);
+}
+vec3 ramp(vec3 base, float t, float hi) {
+  float v = mix(0.10, hi, pow(t, 1.15));
+  vec3 tint = mix(vec3(0.78, 0.86, 1.30), vec3(1.08, 1.04, 0.86), t);
+  vec3 c = base * tint; c *= lum(base) / max(lum(c), 1e-6);
+  float mean = (c.r + c.g + c.b) / 3.0;
+  c = mean + (c - mean) * (1.0 + 0.2 * sin(3.14159 * t) - 0.15 * t);
+  return max(c * v, 0.0);
+}
+vec3 skyAt(ivec2 p) {
+  // banded sky gradient, a pixel sun, stars at night, banded halos round the lights
+  float y = (float(p.y) - u_ground) / (${VH}.0 - u_ground);
+  float yb = floor(clamp(y, 0.0, 1.0) * 7.0) / 7.0;
+  vec3 c = mix(u_skyHor, u_skyTop, pow(yb, 0.7));
+  vec2 sp = u_sunScreen.xy;
+  float ds = length(vec2(p) + 0.5 - sp);
+  if (u_sunScreen.z > 0.0) {
+    if (ds < 5.5) return srgb(u_sunCol * 1.1 + 0.2);
+    float halo = floor(clamp(1.0 - ds / 46.0, 0.0, 1.0) * 3.0) / 3.0;
+    c = mix(c, srgb(u_sunCol * 0.9), halo * 0.35);
+  }
+  if (u_night > 0.0) {
+    float h = hash(vec2(p));
+    if (h > 0.995 && y > 0.15) c = mix(c, vec3(0.85, 0.88, 1.0), u_night * (h - 0.995) * 200.0 * 0.6);
+  }
+  for (int i = 0; i < 4; i++) {
+    if (i >= u_nPoint) break;
+    float d = length(vec2(p) + 0.5 - u_pPos[i].xy);
+    float halo = floor(clamp(1.0 - d / 30.0, 0.0, 1.0) * 3.0) / 3.0;
+    c = mix(c, srgb(u_pCol[i] * 0.25), halo * 0.5);
+  }
+  return c;
+}
+
+void main() {
+  vec2 f = (gl_FragCoord.xy - u_off) / u_scale;
+  ivec2 p = ivec2(floor(f));
+  if (p.x < 0 || p.y < 0 || p.x >= ${VW} || p.y >= ${VH}) { o = vec4(0.04, 0.045, 0.07, 1); return; }
+  // light sources drawn as pixels
+  for (int i = 0; i < 4; i++) {
+    if (i >= u_nPoint) break;
+    vec2 d = vec2(p) + 0.5 - u_pPos[i].xy;
+    if (abs(d.x) < 1.0 && d.y > -1.0 && d.y < 2.0) { o = vec4(srgb(u_pCol[i] * 0.12 + vec3(0.9, 0.7, 0.3)), 1); return; }
+    if (abs(d.x) < 1.0 && d.y > -3.0 && d.y <= -1.0) { o = vec4(0.25, 0.16, 0.09, 1); return; }
+  }
+  int mc = matClass(p);
+  if (mc < 0) { o = vec4(skyAt(p), 1); return; }
+  vec4 L = texelFetch(lt, p, 0);
+  vec4 m = texelFetch(g3t, p, 0);
+  vec3 s;
+  if (u_look == 0) {
+    s = rawAt(p);
+  } else {
+    int b = bandAt(p);
+    if (u_clean) {
+      // a pixel whose band no 4-neighbour shares takes the commonest band of its 8 neighbours
+      ivec2 N4[4] = ivec2[4](ivec2(1,0), ivec2(-1,0), ivec2(0,1), ivec2(0,-1));
+      bool same = false;
+      for (int k = 0; k < 4; k++) { ivec2 q = p + N4[k]; if (matClass(q) == mc && bandAt(q) == b) same = true; }
+      if (!same) {
+        int nb[8]; int total = 0;
+        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+          if (dx == 0 && dy == 0) continue;
+          ivec2 q = p + ivec2(dx, dy);
+          if (matClass(q) != mc) continue;
+          nb[total++] = bandAt(q);
+        }
+        if (total >= 3) {
+          int best = b, bc = 0;
+          for (int i = 0; i < 8; i++) {
+            if (i >= total) break;
+            int c = 0;
+            for (int j = 0; j < 8; j++) { if (j >= total) break; if (nb[j] == nb[i]) c++; }
+            if (c > bc) { bc = c; best = nb[i]; }
+          }
+          b = best;
+        }
+      }
+    }
+    if (u_look == 1) {
+      // keep the raw colour (hue, saturation, leaf texture); snap only its brightness to the band
+      vec3 r = rawAt(p);
+      float Y = max(lum(r), 1e-3);
+      s = clamp(r * (exp2(float(b) / spp()) / Y), 0.0, 1.0);
+    } else {
+      float t = float(b) / float(u_bands - 1);
+      vec3 base; float hi;
+      if (mc == 1) { base = m.rgb / lum(m.rgb) * 0.25; hi = 1.6; }
+      else if (mc == 0) { base = m.rgb / lum(m.rgb) * 0.22; hi = 1.28; }
+      else { base = m.rgb / lum(m.rgb) * 0.22; hi = 1.35; }
+      s = srgb(ramp(base, t, hi) * pow(max(L.rgb, 0.0), vec3(0.8)));
+    }
+  }
+  // aerial perspective for trees set back (z placement < 0)
+  float zc = 0.5 * (texelFetch(g2t, p, 0).x + texelFetch(g2t, p, 0).y);
+  // aerial perspective: a light, perceptual (sRGB) blend toward the horizon colour for things
+  // set back. Blending in linear light lifts dark greens far too much (washed-out back row).
+  s = mix(s, srgb(u_haze), clamp(-zc / 60.0, 0.0, 1.0) * u_hazeAmt);
+  if (u_outline && mc != 2 && u_look != 0) {
+    bool edge = false;
+    ivec2 N4[4] = ivec2[4](ivec2(1,0), ivec2(-1,0), ivec2(0,1), ivec2(0,-1));
+    for (int k = 0; k < 4; k++) if (matClass(p + N4[k]) == -1) edge = true;
+    if (edge) { float k = lum(s) < 0.35 ? 1.0 : 0.35; s = mix(s, s * vec3(0.45, 0.5, 0.62), k); }
+  }
+  o = vec4(s, 1);
+}`;
+
+const P_SPRITE = prog(FS_SPRITE), P_GROUND = prog(FS_GROUND), P_LIGHT = prog(FS_LIGHT), P_FINAL = prog(FS_FINAL);
+gl.bindVertexArray(gl.createVertexArray());
+
+// ---------------------------------------------------------------- render targets
+const G = [0, 1, 2, 3].map(() => tex(VW, VH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT));
+const gFbo = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, gFbo);
+G.forEach((t, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t, 0));
+gl.drawBuffers([0, 1, 2, 3].map(i => gl.COLOR_ATTACHMENT0 + i));
+const LT = tex(VW, VH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+const lFbo = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, lFbo);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, LT, 0);
+
+// ---------------------------------------------------------------- sprites + scene
+const sprites = {};
+async function loadImg(url) {
+  const blob = await (await fetch(url)).blob();
+  return createImageBitmap(blob, { premultiplyAlpha: "none", colorSpaceConversion: "none" });
+}
+function imgTex(bmp) {
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  return tex(bmp.width, bmp.height, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
+}
+function bottomRow(bmp) {
+  const c = new OffscreenCanvas(bmp.width, bmp.height), x = c.getContext("2d");
+  x.drawImage(bmp, 0, 0);
+  const d = x.getImageData(0, 0, bmp.width, bmp.height).data;
+  for (let y = bmp.height - 1; y >= 0; y--) for (let i = 0; i < bmp.width; i++) if (d[(y * bmp.width + i) * 4 + 3] > 127) return bmp.height - 1 - y;
+  return 0;
+}
+async function loadSprites() {
+  const list = await (await fetch("sprites.json")).json();
+  for (const m of list) {
+    const name = m.dir.split("/").pop();
+    const [a, n, d, t] = await Promise.all(["v_albedo", "v_normal", "v_data", "v_mat"].map(k => loadImg(`../${m.dir}/${k}.png`)));
+    sprites[name] = { meta: m, w: a.width, h: a.height, base: bottomRow(a), alb: imgTex(a), nrm: imgTex(n), dat: imgTex(d), mat: imgTex(t) };
+  }
+}
+// x: centre of the trunk in virtual pixels, z: depth placement (negative = further back)
+const SCENE = [
+  { s: "poplar_a", x: 30, z: -48 }, { s: "beech_c", x: 122, z: -46, flip: true }, { s: "poplar_a", x: 302, z: -44, flip: true },
+  { s: "alder_d", x: 352, z: -36 }, { s: "hazel_a", x: 214, z: -30 },
+  { s: "alder_a", x: 70, z: -4 }, { s: "alder_b", x: 160, z: 6, flip: true }, { s: "alder_a", x: 270, z: 2, flip: true },
+  { s: "hazel_a", x: 362, z: 24, flip: true },
+];
+
+// ---------------------------------------------------------------- lighting state
+const $ = id => document.getElementById(id);
+const st = { torch: { x: 120, h: 30, z: 20 }, dragging: false };
+const PRESETS = {
+  morning: { sunA: 32, sunZ: -25, sunI: 230, torch: false, expo: 105 },
+  noon: { sunA: 75, sunZ: -20, sunI: 260, torch: false, expo: 95 },
+  sunset: { sunA: 168, sunZ: -55, sunI: 200, torch: false, expo: 95 },
+  night: { sunA: 90, sunZ: 30, sunI: 0, torch: true, expo: 120 },
+};
+function applyPreset(k) {
+  const p = PRESETS[k];
+  $("sunA").value = p.sunA; $("sunZ").value = p.sunZ; $("sunI").value = p.sunI; $("torch").checked = p.torch; $("expo").value = p.expo;
+  document.querySelectorAll("#presets button").forEach(b => b.classList.toggle("on", b.dataset.p === k));
+}
+document.querySelectorAll("#presets button").forEach(b => b.onclick = () => applyPreset(b.dataset.p));
+const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+const clamp01 = v => Math.min(1, Math.max(0, v));
+
+function lightState(time) {
+  const ang = +$("sunA").value * Math.PI / 180, sunZ = +$("sunZ").value / 100, sunI = +$("sunI").value / 100;
+  const elev = Math.sin(ang);                       // 0 at the horizons, 1 overhead
+  const dir = [Math.cos(ang) * Math.sqrt(1 - sunZ * sunZ) * -1, Math.max(Math.sin(ang), 0.02) * Math.sqrt(1 - sunZ * sunZ), sunZ];
+  // the sun's colour and the sky follow its elevation; a low sun is orange
+  const warm = 1 - clamp01(elev * 1.6);
+  let sunCol = mix([1.0, 0.95, 0.85], [1.0, 0.42, 0.14], warm).map(v => v * sunI);
+  const day = clamp01(sunI / 2.2);
+  let skyTop = mix([0.2, 0.42, 0.75], [0.25, 0.22, 0.45], warm), skyHor = mix([0.62, 0.78, 0.92], [0.98, 0.62, 0.38], warm);
+  const night = 1 - day;
+  skyTop = mix(skyTop, [0.02, 0.03, 0.08], night); skyHor = mix(skyHor, [0.06, 0.07, 0.15], night);
+  const sky = mix([0.2, 0.28, 0.42], [0.025, 0.035, 0.08], night).map((v, i) => v * mix([1, 1, 1], [0.75, 0.6, 0.75], warm * day)[i]);
+  const bounce = mix([0.1, 0.09, 0.06], [0.01, 0.01, 0.015], night);
+  const pts = [];
+  if ($("torch").checked) {
+    const fl = 0.85 + 0.1 * Math.sin(time * 13.0) + 0.05 * Math.sin(time * 31.0 + 1.3);
+    const ti = +$("torchI").value / 100 * fl;
+    pts.push({ p: [st.torch.x, st.torch.h, st.torch.z], c: [1.0 * ti, 0.52 * ti, 0.2 * ti], r: 26,
+                screen: [st.torch.x, st.torch.h + yg(st.torch.z), st.torch.z] });
+  }
+  // the sun on screen (it sits "behind" the scene plane, drawn in the sky)
+  const sunScreen = [VW / 2 - Math.cos(ang) * VW * 0.46, GROUND + Math.sin(ang) * (VH - GROUND) * 0.85, sunI > 0.05 ? 1 : 0];
+  const haze = skyHor.map(v => Math.pow(v, 2.2));
+  return { dir, sunCol, sky, bounce, pts, skyTop, skyHor, sunScreen, night, haze };
+}
+
+// ---------------------------------------------------------------- wind
+// Gusts travel across the scene left to right, so neighbouring trees lean in turn. Each tree
+// leans with the gust and sways at its own natural frequency (taller = slower); poplars bend more.
+const FLEX = { poplar_a: 1.25, hazel_a: 0.7, beech_c: 1.1 };
+function gustAt(x, t) {
+  const tt = t - x / 90;                            // the gust front moves at ~90 px/s
+  return 0.55 + 0.3 * Math.sin(tt * 0.45) + 0.2 * Math.sin(tt * 1.3 + 1.7) + 0.12 * Math.sin(tt * 3.1 + 0.4);
+}
+function windFor(it, sp, t) {
+  const W = +$("wind").value / 10, dirSign = $("windDir").checked ? -1 : 1;
+  const hs = (sp.h - sp.base) / 100, flex = FLEX[it.s] || 1;
+  const phase = it.x * 0.137 + it.z * 0.05;
+  const freq = 0.55 / Math.sqrt(Math.max(hs, 0.3));  // Hz
+  const g = gustAt(it.x, t);
+  const sway = 0.65 * g + 0.35 * g * Math.sin(2 * Math.PI * freq * t + phase);
+  return { bend: dirSign * W * 3.2 * hs * flex * sway, flutter: (+$("flutter").value / 10) * (0.4 + 0.8 * g) * Math.min(1, W + 0.2), phase };
+}
+
+// ---------------------------------------------------------------- input
+function toVirtual(e) {
+  const r = canvas.getBoundingClientRect();
+  const s = st.scale, ox = (r.width * devicePixelRatio - VW * s) / 2, oy = (r.height * devicePixelRatio - VH * s) / 2;
+  const x = ((e.clientX - r.left) * devicePixelRatio - ox) / s;
+  const y = ((r.bottom - e.clientY) * devicePixelRatio - oy) / s;
+  return [x, y];
+}
+function moveLight(e) {
+  const [x, y] = toVirtual(e);
+  if ($("torch").checked) { st.torch.x = x; st.torch.h = Math.max(1, y - yg(st.torch.z)); }
+  else {
+    // drag the sun: its angle from where the pointer is relative to the scene centre
+    const a = Math.atan2(Math.max(y - GROUND, 1), -(x - VW / 2)) * 180 / Math.PI;
+    $("sunA").value = Math.round(Math.min(180, Math.max(0, a)));
+  }
+}
+canvas.addEventListener("pointerdown", e => { st.dragging = true; canvas.setPointerCapture(e.pointerId); moveLight(e); });
+canvas.addEventListener("pointermove", e => { if (st.dragging) moveLight(e); });
+canvas.addEventListener("pointerup", () => st.dragging = false);
+canvas.addEventListener("wheel", e => { e.preventDefault(); st.torch.z = Math.max(-54, Math.min(80, st.torch.z - Math.sign(e.deltaY) * 4)); }, { passive: false });
+
+// ---------------------------------------------------------------- frame
+function resize() {
+  const s = +$("scale").value;
+  const fit = Math.max(1, Math.floor(Math.min(innerWidth * devicePixelRatio / VW, innerHeight * devicePixelRatio / VH)));
+  st.scale = Math.min(s, fit);
+  canvas.width = Math.floor(innerWidth * devicePixelRatio); canvas.height = Math.floor(innerHeight * devicePixelRatio);
+  canvas.style.width = innerWidth + "px"; canvas.style.height = innerHeight + "px";
+}
+addEventListener("resize", resize); $("scale").oninput = resize;
+
+let frames = 0, tLast = performance.now();
+function frame(now) {
+  const ls = lightState(now / 1000);
+  // 1. G-buffer
+  gl.bindFramebuffer(gl.FRAMEBUFFER, gFbo);
+  gl.viewport(0, 0, VW, VH);
+  gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); gl.clearBufferfv(gl.COLOR, 1, [0, 0, 1, 1]);
+  gl.clearBufferfv(gl.COLOR, 2, [0, 0, 0, 0]); gl.clearBufferfv(gl.COLOR, 3, [0, 0, 0, 0]);
+  gl.useProgram(P_GROUND.p);
+  gl.uniform2f(P_GROUND.u.u_view, VW, VH); gl.uniform4f(P_GROUND.u.u_rect, 0, 0, VW, GROUND); gl.uniform1f(P_GROUND.u.u_ground, GROUND);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+  gl.useProgram(P_SPRITE.p);
+  const U = P_SPRITE.u;
+  gl.uniform2f(U.u_view, VW, VH);
+  [["t_alb", "alb"], ["t_nrm", "nrm"], ["t_dat", "dat"], ["t_mat", "mat"]].forEach(([u], i) => gl.uniform1i(U[u], i));
+  const order = [...SCENE].sort((a, b) => a.z - b.z);
+  for (const it of order) {
+    const sp = sprites[it.s]; if (!sp) continue;
+    const ox = Math.round(it.x - sp.w / 2), oy = Math.round(yg(it.z)) - 1 - sp.base;
+    const w = windFor(it, sp, now / 1000), pad = Math.ceil(Math.abs(w.bend)) + 3;
+    gl.uniform4f(U.u_rect, ox - pad, oy, ox + sp.w + pad, oy + sp.h + 2);
+    gl.uniform1f(U.u_bend, w.bend); gl.uniform1f(U.u_flutter, w.flutter); gl.uniform1f(U.u_base, sp.base);
+    gl.uniform1f(U.u_time, now / 1000); gl.uniform1f(U.u_phase, w.phase);
+    gl.uniform2f(U.u_origin, ox, oy); gl.uniform2f(U.u_size, sp.w, sp.h);
+    gl.uniform1f(U.u_zscale, sp.meta.zscale * 0.55); gl.uniform1f(U.u_drange, sp.meta.depth_range);
+    gl.uniform1f(U.u_zplace, it.z); gl.uniform1f(U.u_flip, it.flip ? 1 : 0);
+    gl.uniform3fv(U.u_leafBase, sp.meta.leaf_albedo); gl.uniform3fv(U.u_barkBase, sp.meta.bark_albedo);
+    [sp.alb, sp.nrm, sp.dat, sp.mat].forEach((t, i) => { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); });
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+  // 2. lighting
+  gl.bindFramebuffer(gl.FRAMEBUFFER, lFbo);
+  gl.useProgram(P_LIGHT.p);
+  const L = P_LIGHT.u;
+  gl.uniform2f(L.u_view, VW, VH); gl.uniform4f(L.u_rect, 0, 0, VW, VH);
+  ["g0t", "g1t", "g2t", "g3t"].forEach((u, i) => { gl.uniform1i(L[u], i); gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, G[i]); });
+  gl.uniform3fv(L.u_sunDir, ls.dir); gl.uniform3fv(L.u_sunCol, ls.sunCol); gl.uniform3fv(L.u_sky, ls.sky); gl.uniform3fv(L.u_bounce, ls.bounce);
+  gl.uniform1i(L.u_nPoint, ls.pts.length);
+  if (ls.pts.length) {
+    gl.uniform3fv(L.u_pPos, ls.pts.flatMap(p => p.p)); gl.uniform3fv(L.u_pCol, ls.pts.flatMap(p => p.c)); gl.uniform1fv(L.u_pRad, ls.pts.map(p => p.r));
+  }
+  gl.uniform1f(L.u_sigma, +$("sigma").value / 100); gl.uniform1f(L.u_expo, +$("expo").value / 100); gl.uniform1f(L.u_ground, GROUND);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+  // 3. final, straight to the canvas
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(P_FINAL.p);
+  const F = P_FINAL.u;
+  gl.uniform2f(F.u_view, canvas.width, canvas.height); gl.uniform4f(F.u_rect, 0, 0, canvas.width, canvas.height);
+  [["g0t", G[0]], ["g2t", G[2]], ["g3t", G[3]], ["lt", LT]].forEach(([u, t], i) => { gl.uniform1i(F[u], i); gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); });
+  gl.uniform1f(F.u_scale, st.scale);
+  gl.uniform2f(F.u_off, Math.floor((canvas.width - VW * st.scale) / 2), Math.floor((canvas.height - VH * st.scale) / 2));
+  gl.uniform1i(F.u_bands, +$("bands").value);
+  gl.uniform1i(F.u_clean, $("clean").checked); gl.uniform1i(F.u_outline, $("outline").checked);
+  gl.uniform1i(F.u_dither, $("dither").checked); gl.uniform1i(F.u_look, +$("look").value);
+  gl.uniform3fv(F.u_skyTop, ls.skyTop); gl.uniform3fv(F.u_skyHor, ls.skyHor);
+  gl.uniform3fv(F.u_sunScreen, ls.sunScreen); gl.uniform3fv(F.u_sunCol, ls.sunCol.map(v => v / Math.max(1, +$("sunI").value / 100)));
+  gl.uniform1f(F.u_night, ls.night); gl.uniform1f(F.u_ground, GROUND); gl.uniform3fv(F.u_haze, ls.haze); gl.uniform1f(F.u_hazeAmt, +$("haze").value / 100);
+  gl.uniform1i(F.u_nPoint, ls.pts.length);
+  if (ls.pts.length) { gl.uniform3fv(F.u_pPos, ls.pts.flatMap(p => p.screen)); gl.uniform3fv(F.u_pCol, ls.pts.flatMap(p => p.c)); }
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+  if (window.__grab) {   // debug: save this frame at native resolution (tools/devserver.py)
+    const name = window.__grab; window.__grab = null;
+    canvas.toBlob(b => fetch("/save?name=" + name, { method: "POST", body: b }), "image/png");
+  }
+  frames++;
+  if (now - tLast > 1000) { $("stats").textContent = `${VW}x${VH} virtual px · ${frames} fps`; frames = 0; tLast = now; }
+  requestAnimationFrame(frame);
+}
+
+resize();
+applyPreset("morning");
+loadSprites().then(() => requestAnimationFrame(frame)).catch(e => { document.body.insertAdjacentHTML("beforeend", `<pre style="position:absolute;bottom:0;color:#f88">${e.stack || e}</pre>`); console.error(e); });
+window.__state = st;
+</script>
+</body>
+</html>

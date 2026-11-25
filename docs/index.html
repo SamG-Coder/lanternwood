@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lanternwood — a pixel world lit by ray-traced light</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #07080c; color: #d8dbe4; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  canvas { position: absolute; inset: 0; display: block; outline: none; }
+  #toast { position: absolute; top: 9%; left: 0; right: 0; text-align: center; pointer-events: none; opacity: 0;
+           transition: opacity 1.2s ease; font: 600 30px/1.2 Georgia, "Times New Roman", serif; letter-spacing: 0.08em;
+           color: #f3ead2; text-shadow: 0 2px 0 #2a2116, 0 0 18px rgba(0,0,0,0.65); }
+  #toast small { display: block; font: 500 12px/1.6 system-ui, sans-serif; letter-spacing: 0.3em; color: #cdbf9c; text-transform: uppercase; }
+  #hud { position: absolute; left: 12px; bottom: 10px; color: #aab; font-size: 11px; text-shadow: 0 1px 0 #000; pointer-events: none; }
+  #clock { position: absolute; right: 14px; top: 10px; font: 600 13px/1 Georgia, serif; color: #f0e6cc; text-shadow: 0 1px 0 #000; pointer-events: none; }
+  #panel { position: absolute; right: 12px; top: 34px; width: 230px; background: rgba(10, 12, 20, 0.88); border-radius: 8px; padding: 10px 12px; display: none; }
+  #panel.open { display: block; }
+  #panel label { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; gap: 8px; }
+  #panel input[type=range] { width: 110px; }
+  #panel h2 { font-size: 12px; margin: 0 0 6px; color: #fff; font-weight: 600; }
+  #loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #07080c;
+             font: 600 18px Georgia, serif; color: #e8dfc6; gap: 12px; transition: opacity 0.8s; }
+  #bar { width: 260px; height: 4px; background: #222634; border-radius: 2px; overflow: hidden; }
+  #bar div { height: 100%; width: 0; background: #d7b86e; transition: width 0.2s; }
+  #notice { position: absolute; right: 12px; bottom: 10px; color: #778; font-size: 10px; text-shadow: 0 1px 0 #000; max-width: 46vw; text-align: right; }
+  #err { color: #f88; font: 12px monospace; white-space: pre-wrap; max-width: 80vw; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<div id="toast"></div>
+<div id="clock"></div>
+<div id="notice">Plant, tree and rock art derived from Quixel Megascans &amp; Megaplants © Epic Games, used under the Fab EULA.
+It is licensed for use in this game only and may not be extracted or reused.</div>
+<div id="hud">A / D or ← → walk · W / S or ↑ ↓ move along the trail · Space jump · Shift run · [ ] time of day · T time flow · H settings</div>
+<div id="panel">
+  <h2>Settings</h2>
+  <label>Look <select id="look"><option value="1" selected>Banded light</option><option value="0">Raw lighting</option></select></label>
+  <label>Bands <input id="bands" type="range" min="3" max="9" value="5"></label>
+  <label>Depth of field <input id="dof" type="range" min="0" max="100" value="60"></label>
+  <label>Bloom <input id="bloom" type="range" min="0" max="100" value="45"></label>
+  <label>Haze <input id="haze" type="range" min="0" max="100" value="55"></label>
+  <label>Wind <input id="wind" type="range" min="0" max="30" value="10"></label>
+  <label>Time flow <input id="flow" type="range" min="0" max="100" value="12"></label>
+  <label>Outline <input id="outline" type="checkbox" checked></label>
+  <label>Despeckle <input id="clean" type="checkbox" checked></label>
+</div>
+<div id="loading"><div>Baking the light…</div><div id="bar"><div></div></div><div id="err"></div></div>
+<script src="js/rtpack.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>

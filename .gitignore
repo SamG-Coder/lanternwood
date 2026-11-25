@@ -1,0 +1,10 @@
+# local working output (frame grabs, test sheets) and the prototype sprite folder
+out/
+sprites/
+__pycache__/
+*.pyc
+.claude/settings.local.json
+
+# private bake output (raw sprites, layout); only docs/data/world.rtp is published
+bake/
+.claude/
