@@ -257,15 +257,16 @@ function roadHtml(ch) {
     const ready = !road.missing.length;
     gate = `<div class="gate"><div class="gn">${esc(g.name)}</div><div class="gb">${g.end ? "At the road's end" : `Blocks the way to ${esc(road.beyond)}`}</div>
       <div class="dd">${esc(g.desc)}</div>
-      ${Object.keys(g.needs).map(id => { const have = S.owned(ch, id), need = g.needs[id];
-        return `<div class="need ${have >= need ? "ok" : "miss"}">${iconImg(id)}<span class="nn">${esc(D.ITEMS[id].name)}</span><span class="nc">${Math.min(have, need)}/${need}</span><span class="nw">${esc(whereFrom(id))}</span></div>`; }).join("")}
+      ${Object.keys(g.needs).map(id => { const have = S.count(ch, id), need = g.needs[id], held = S.owned(ch, id) > have;
+        return `<div class="need ${have >= need ? "ok" : "miss"}">${iconImg(id)}<span class="nn">${esc(D.ITEMS[id].name)}</span><span class="nc">${Math.min(have, need)}/${need}</span><span class="nw">${held && have < need ? "You're using one: take it off to give it" : esc(whereFrom(id))}</span></div>`; }).join("")}
       <div class="gs">${ready ? (road.here ? `Everything is ready. ${UI.glyph ? UI.glyph("interact") : "<kbd>E</kbd>"} to mend it.` : `Everything is ready. It lies ${dist > 0 ? dist + " m ahead" : "behind you"}.`)
         : `Gather and craft what it needs, then come back to it${dist > 3 ? ` (${dist} m ahead)` : ""}.`}</div></div>`;
   }
   const buffs = Object.keys(D.EFFECTS).filter(k => ch.buffs && ch.buffs[k] > now);
   const jobs = ch.jobs.map(id => D.jobById(id)).filter(Boolean).map(j => {
-    const have = S.owned(ch, j.item);
+    const have = S.count(ch, j.item), held = S.owned(ch, j.item) > have;
     return `<div class="job">${iconImg(j.item)}<div><div class="jf">${esc(j.from)}</div><div class="jn">${j.n} × ${esc(D.ITEMS[j.item].name)} <span style="color:${have >= j.n ? "#a8d08a" : "var(--ink-3)"};font-size:12px">(${Math.min(have, j.n)}/${j.n})</span></div>
+      ${held && have < j.n ? `<div class="jr" style="color:#e8c890">You're using one: take it off to give it</div>` : ""}
       <div class="jr">Reward ${iconImg(j.reward[0], j.reward[1])} ${esc(D.ITEMS[j.reward[0]].name)} · ${j.xp} ${D.SKILLS[j.skill].name} xp</div></div>
       <button class="btn" data-deliver="${j.id}" ${have >= j.n ? "" : "disabled"}>Give</button></div>`;
   }).join("");

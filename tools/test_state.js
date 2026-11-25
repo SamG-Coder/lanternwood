@@ -211,16 +211,18 @@ for (const id in D.ITEMS) if (D.ITEMS[id].kind === "potion") ok(D.EFFECTS[D.ITEM
   let e = S.act(c, { t: "repair", id: "trunk" }, { now: t });
   ok(e[0].t === "error" && /Still needs/.test(e[0].why) && /Hazel Rod/.test(e[0].why), "missing items listed");
   give(c, "hazel", 3); give(c, "granite", 2); give(c, "staff_hazel", 1);
-  // equip the staff: it still counts, and is taken from your hand
+  // a staff in your hand is never taken: the repair asks you to take it off first
   const slot = c.inv.findIndex(x => x && x.id === "staff_hazel");
   S.act(c, { t: "equip", slot }, { now: t });
   ok(c.equip.main === "staff_hazel" && S.owned(c, "staff_hazel") === 1, "equipped staff owned");
+  const held = S.act(c, { t: "repair", id: "trunk" }, { now: t });
+  ok(held[0].t === "error" && /take off the one you're using/.test(held[0].why) && c.equip.main === "staff_hazel", "equipped staff not taken");
+  S.act(c, { t: "unequip", slot: "main" }, { now: t });
   ok(S.act(c, { t: "repair", id: "trunk" }, { now: t, player: { x: 0 }, lookupGate: () => ({ x: 50 }) })[0].why === "Too far away", "repair reach");
   ok(S.act(c, { t: "repair", id: "trunk" }, { now: t, startedAt: t - 500 })[0].why === "Not so fast", "repair takes time");
   e = S.act(c, { t: "repair", id: "trunk" }, { now: t, player: { x: 49 }, lookupGate: () => ({ x: 50 }), startedAt: t - 3000 });
   ok(e.some(x => x.t === "repaired" && x.id === "trunk"), "trunk mended");
-  ok(e.some(x => x.t === "unequipped" && x.used), "equipped staff used up");
-  ok(c.equip.main === null && S.count(c, "hazel") === 0 && S.count(c, "granite") === 0, "needs consumed");
+  ok(S.count(c, "staff_hazel") === 0 && S.count(c, "hazel") === 0 && S.count(c, "granite") === 0, "needs consumed");
   ok(S.count(c, "draught_minor") === 4, "reward given");
   ok(S.stage(c) === 1, "stage 1");
   ok(S.act(c, { t: "repair", id: "trunk" }, { now: t })[0].why === "Already mended", "no double repair");
@@ -229,6 +231,8 @@ for (const id in D.ITEMS) if (D.ITEMS[id].kind === "potion") ok(D.EFFECTS[D.ITEM
   ok(r.gates.trunk === true && S.stage(r) === 1, "gate state saved");
   const forged = JSON.parse(JSON.stringify(c)); forged.gates = { shrine: true, __proto__: { x: 1 }, nope: true };
   ok(S.stage(S.load(JSON.stringify(forged))) === 0, "stage counts only mended gates in order");
+  forged.gates = { trunk: true, rockfall: true };
+  ok(Object.keys(S.load(JSON.stringify(forged)).gates).join() === "trunk", "load keeps only gates mended in order");
 }
 // a full bag refuses the repair and changes nothing
 {
@@ -239,11 +243,24 @@ for (const id in D.ITEMS) if (D.ITEMS[id].kind === "potion") ok(D.EFFECTS[D.ITEM
   const e = S.act(c, { t: "repair", id: "trunk" }, { now: t });
   ok(e[0].why === "Your bag is full" && JSON.stringify(c) === before, "full bag: no repair, nothing lost");
 }
+// a region the road hasn't reached can't be gathered, even standing at its edge
+{
+  const c = S.newCharacter("G", {}, t);
+  const world = { "b@1": { species: "Field_Poppy", region: "Beechwood Hollow", ri: 1, x: 0, d: 14 }, "h@1": { species: "Field_Poppy", region: "Hearthmeadow", ri: 0, x: 0, d: 14 } };
+  const lookupNode = k => world[k] || null;
+  ok(S.act(c, { t: "gather", key: "b@1" }, { now: t, lookupNode })[0].why === "The road there isn't open yet", "locked region refused");
+  ok(S.act(c, { t: "gather", key: "h@1" }, { now: t, lookupNode }).some(x => x.t === "item"), "open region fine");
+  c.gates.trunk = true;
+  ok(S.act(c, { t: "gather", key: "b@1" }, { now: t, lookupNode }).some(x => x.t === "item"), "opens with the road");
+}
 // commissions
 {
   const c = S.newCharacter("J", {}, t);
   c.jobs = ["j_poppy", "j_hazel", "j_granite"];
   ok(S.act(c, { t: "deliver", id: "j_poppy" }, { now: t })[0].why === "Needs 5 Poppy Petals", "deliver needs items");
+  // a tool in use is never handed over
+  const cq = S.newCharacter("K", {}, t); cq.jobs = ["j_pick", "j_hazel", "j_granite"]; cq.tools.stonecutting = "pick_stone";
+  ok(S.act(cq, { t: "deliver", id: "j_pick" }, { now: t })[0].why === "Take off your Stone Pick first" && cq.tools.stonecutting === "pick_stone", "equipped tool not delivered");
   ok(S.act(c, { t: "deliver", id: "j_wheat" }, { now: t })[0].t === "error", "only open jobs");
   ok(S.act(c, { t: "deliver", id: "__proto__" }, { now: t })[0].t === "error", "junk job id refused");
   give(c, "poppy", 7);
@@ -279,6 +296,15 @@ for (const id in D.ITEMS) if (D.ITEMS[id].kind === "potion") ok(D.EFFECTS[D.ITEM
   // the fastest gather is still bounded with the best tool and the best potion
   const c2 = S.newCharacter("Q", {}, t);
   ok(S.act(c2, { t: "gather", key: "q1", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, startedAt: t, duration: 0 })[0].why === "Not so fast", "zero duration still refused");
+  // without a potion the floor is the tool's alone (a claimed potion-speed gather is refused)
+  const fast = D.NODES.Field_Poppy.time * 0.5 / (1.3 * 1.4);
+  ok(S.act(c2, { t: "gather", key: "q2", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, startedAt: t - fast * 1000, duration: 0 })[0].why === "Not so fast", "no potion: no potion speed");
+  // a potion that ran out during the gather still counts
+  c2.buffs.hale = t - 10;
+  ok(S.act(c2, { t: "gather", key: "q3", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, startedAt: t - 2000, duration: 0 }).some(x => x.t === "item"), "potion at the start counts");
+  // a forged far-future potion does nothing
+  const c3 = S.newCharacter("Z", {}, t); c3.buffs.hale = t + 1e12;
+  ok(S.gatherTime(c3, D.NODES.Field_Poppy, t) === D.NODES.Field_Poppy.time, "forged potion end ignored");
 }
 // curios: found in the node's region, never twice, all of them findable
 {

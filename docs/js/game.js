@@ -70,7 +70,8 @@ let VW = CAM.vw, VH = CAM.vh;
 const PATH = world.path, LEN = world.length;
 // how far up and down the player can roam: from just above the bottom of the screen to the
 // far meadow (the road itself is PATH)
-const D_NEAR = Math.max(F * HC / (HOR - 8), PATH[0] - 2.5), D_FAR = PATH[1] + 3.2;
+const D_ROAD = (PATH[0] + PATH[1]) / 2;
+const D_NEAR = Math.max(F * HC / (HOR - 8), D_ROAD * 0.8), D_FAR = D_ROAD * 1.25;
 
 // ---------------------------------------------------------------- GL
 const canvas = $("c");
@@ -640,15 +641,16 @@ const regionAt = x => world.regions.find(r => x >= r.x0 && x < r.x1) || (x < 0 ?
 const objects = world.objects.map((o, i) => {
   const v = catalog.variants[o.v];
   const species = v ? v.species : "";
-  const region = regionAt(o.x).name;
-  return { ...o, id: i + 1, phase: (o.x * 0.137 + o.d * 0.05) % 6.283, species, region,
+  const reg = regionAt(o.x), region = reg.name, ri = world.regions.indexOf(reg);
+  return { ...o, id: i + 1, phase: (o.x * 0.137 + o.d * 0.05) % 6.283, species, region, ri,
            node: o.gate ? null : LWData.nodeFor(species, region), key: `${o.v}@${o.x.toFixed(1)},${o.d.toFixed(1)}`, hidden: false };
 });
-const nodeObjects = objects.filter(o => o.node && o.x > -2 && o.x < LEN + 2 && o.d > PATH[0] - 4.5 && o.d < PATH[1] + 4.5);
+const nodeObjects = objects.filter(o => o.node && o.x > -2 && o.x < LEN + 2 && o.d > D_NEAR - 4.5 && o.d < D_FAR + 4.5);
 // the world's own record of every node, by key (what a server would look up; commands can't forge it)
 const nodeByKey = new Map(nodeObjects.map(o => [o.key, o]));
-const lookupNode = key => { const o = nodeByKey.get(key); return o ? { species: o.species, region: o.region, x: o.x, d: o.d } : null; };
-const gateProps = id => objects.filter(o => o.gate === id);
+const lookupNode = key => { const o = nodeByKey.get(key); return o ? { species: o.species, region: o.region, ri: o.ri, x: o.x, d: o.d } : null; };
+const propsByGate = new Map(GATES.map(g => [g.id, objects.filter(o => o.gate === g.id)]));
+const gateProps = id => propsByGate.get(id) || [];
 const lookupGate = id => { const i = GATES.findIndex(g => g.id === id); return i < 0 ? null : { x: gateX[i] }; };
 const sprites = new Map();   // file -> {tex, meta, state}
 function spriteFor(o) {
@@ -840,8 +842,9 @@ UI.bind({
 // trunk, beside a plant), depth less; Tab cycles through the rest
 function candidates() {
   const out = [];
+  const open = ch ? LWState.stage(ch) : 0;
   for (const o of nodeObjects) {
-    if (o.hidden) continue;
+    if (o.hidden || o.ri > open) continue;
     const dx = o.x - st.x, dd = o.d - st.d;
     const tree = !o.node.deplete;
     const rx = tree ? 1.8 : 1.3, rd = tree ? 4.2 : 3.0;
@@ -957,7 +960,7 @@ function promptInfo() {
   if (!o || !ch) return null;
   const dpr0 = devicePixelRatio || 1, offX0 = Math.floor((canvas.width - VW * st.scale) / 2), offY0 = Math.floor((canvas.height - VH * st.scale) / 2);
   if (o.gate) {
-    const ppm = F / o.d, vx = VW / 2 + (o.x - st.camX) * ppm, vy = HOR + (2.6 - HC) * ppm;
+    const ppm = F / o.d, vx = VW / 2 + (o.x - (st.camXs != null ? st.camXs : st.camX)) * ppm, vy = HOR + (2.6 - HC) * ppm;
     const miss = LWState.missingFor(ch, o.gate);
     return { x: (offX0 + vx * st.scale) / dpr0, y: (canvas.height - offY0 - Math.min(vy, VH - 8) * st.scale) / dpr0,
              gate: true, name: o.gate.name, ok: !miss.length, missing: miss.length, verb: "Mend",
@@ -966,7 +969,7 @@ function promptInfo() {
   const v = catalog.variants[o.v];
   const ppm = F / o.d;
   const top = Math.min(v ? v.height : 1, o.node.deplete ? 2.2 : 3.4);
-  const vx = VW / 2 + (o.x - st.camX) * ppm, vy = HOR + (top + 0.4 - HC) * ppm;
+  const vx = VW / 2 + (o.x - (st.camXs != null ? st.camXs : st.camX)) * ppm, vy = HOR + (top + 0.4 - HC) * ppm;
   const dpr = devicePixelRatio || 1, offX = Math.floor((canvas.width - VW * st.scale) / 2), offY = Math.floor((canvas.height - VH * st.scale) / 2);
   const node = o.node, lvl = LWState.level(ch, node.skill);
   const ns = LWState.nodeState(ch, o.key, node, Date.now());
@@ -1015,9 +1018,9 @@ function resize() {
   canvas.style.width = innerWidth + "px"; canvas.style.height = innerHeight + "px";
   // the whole-number scale that keeps the picture closest to its designed height (never much
   // shorter, so the sky and the road both stay in view), then a virtual size that fills the window
-  let k = Math.max(1, Math.round(canvas.height / CAM.vh));
-  if (k > 1 && canvas.height / k < CAM.vh * 0.86) k--;
-  const vw = Math.min(2 * Math.ceil(canvas.width / k / 2), 2 * Math.round(CAM.vh * 1.3)), vh = Math.ceil(canvas.height / k);   // even: the centre is a pixel edge
+  const k = Math.max(1, Math.min(Math.floor(canvas.height / (CAM.vh * 0.86)), Math.floor(canvas.width / (CAM.vw * 0.75))));
+  // even width: the centre is a pixel edge. At most 1.2 x the designed height and 1.46 x its width.
+  const vw = Math.min(2 * Math.ceil(canvas.width / k / 2), 2 * Math.round(CAM.vw * 0.73)), vh = Math.min(Math.ceil(canvas.height / k), Math.round(CAM.vh * 1.2));
   st.scale = k;
   if (vw !== VW || vh !== VH) { VW = vw; VH = vh; allocTargets(); }
   // tell the interface where the picture is, so the HUD sits inside it and not in the bars
@@ -1030,6 +1033,15 @@ addEventListener("resize", resize); resize();
 const FF_N = 8;
 function fireflies(now, sun) {
   const out = [];
+  const si = GATES.findIndex(g => g.end);
+  if (ch && si >= 0 && ch.gates[GATES[si].id] && Math.abs(st.camX - gateX[si]) < 40) {
+    for (let i = 0; i < 6; i++) {
+      const tt = now * 0.0006 + i * 1.1;
+      out.push([gateX[si] + Math.sin(tt + i) * 1.4, 0.8 + Math.abs(Math.sin(tt * 0.8 + i)) * 2.2, D_ROAD + Math.cos(tt * 0.7 + i * 2) * 1.6,
+                0.6 + 0.4 * Math.max(0, Math.sin(now * 0.003 + i))]);
+    }
+    return out;
+  }
   const reg = world.regions[Math.max(st.region, 0)];
   const amount = (reg ? reg.fireflies : 0) * sun.night;
   if (amount < 0.05) return out;
@@ -1059,7 +1071,8 @@ function frame(now) {
 function frameBody(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   update(dt);
-  const t = now / 1000, ppmCam = F / st.d, camX = Math.round(st.camX * ppmCam) / ppmCam;
+  const t = now / 1000, ppmCam = F / D_ROAD, camX = Math.round(st.camX * ppmCam) / ppmCam;
+  st.camXs = camX;
   const sun = sunState(st.time);
   const W = +$("wind").value / 10;
 

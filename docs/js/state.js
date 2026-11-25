@@ -8,7 +8,8 @@
 // action's length fixed when it began), lookupNode(key) -> {species, region, x, d} | null }. When
 // these are given, gathering checks reach and duration too; with lookupNode the node's identity
 // comes from the authority's own world data and the command's species / region are ignored.
-// lookupGate(id) -> {x} | null lets "repair" check the player stands at the obstacle.
+// lookupGate(id) -> {x} | null lets "repair" check the player stands at the obstacle. lookupNode may
+// also give ri (the node's region index): a region the road hasn't opened yet can't be gathered.
 (function (root) {
 "use strict";
 const D = root.LWData || (typeof require !== "undefined" ? require("./data.js") : null);
@@ -25,7 +26,7 @@ const nodeMap = () => Object.create(null);
 // the fastest a gather can ever be (top level, best tool): a duration a caller supplies is never
 // trusted below this, so a client can't claim a zero-second gather
 const BEST_TOOL = Math.max(1, ...Object.values(D.ITEMS).filter(i => i.kind === "tool").map(i => i.speed || 1));
-const minGatherTime = node => node.time * 0.5 / (BEST_TOOL * D.BEST_POTION);
+const minGatherTime = (node, potion) => node.time * 0.5 / (BEST_TOOL * potion);
 const REPAIR_TIME = 3.0, GATE_REACH = 4.0, JOB_SLOTS = 3;
 // a small seeded generator, for what a new character is offered before any command has an rng
 const seeded = seed => { let s = Math.abs(Math.floor(seed)) % 233280; return () => ((s = (s * 9301 + 49297) % 233280) / 233280); };
@@ -84,7 +85,7 @@ function load(json) {
   ch.stats = { gathered: num(st.gathered, 0, 1e12, 0), crafted: num(st.crafted, 0, 1e12, 0), metres: num(st.metres, 0, 1e12, 0),
                jumps: num(st.jumps, 0, 1e12, 0), agiCarry: num(st.agiCarry, 0, 8, 0), jobs: num(st.jobs, 0, 1e12, 0), repairs: num(st.repairs, 0, 1e12, 0) };
   ch.gates = {};
-  if (raw.gates && typeof raw.gates === "object") for (const g of D.GATES) if (hasOwn(raw.gates, g.id) && raw.gates[g.id] === true) ch.gates[g.id] = true;
+  if (raw.gates && typeof raw.gates === "object") for (const g of D.GATES) { if (!(hasOwn(raw.gates, g.id) && raw.gates[g.id] === true)) break; ch.gates[g.id] = true; }
   ch.buffs = {};
   if (raw.buffs && typeof raw.buffs === "object") for (const k in D.EFFECTS) if (hasOwn(raw.buffs, k)) ch.buffs[k] = num(raw.buffs[k], 0, 1e15, 0);
   ch.curios = [];
@@ -130,7 +131,10 @@ function toolSpeed(ch, skill) { const d = itemDef(ch.tools[skill]); return d && 
 function buffOf(ch, now, key) {
   let m = 1;
   if (!ch.buffs) return m;
-  for (const k in D.EFFECTS) { const e = D.EFFECTS[k]; if (e[key] && hasOwn(ch.buffs, k) && ch.buffs[k] > now) m = Math.max(m, e[key]); }
+  for (const k in D.EFFECTS) {
+    const e = D.EFFECTS[k];
+    if (e[key] && hasOwn(ch.buffs, k) && ch.buffs[k] > now && ch.buffs[k] - now <= e.secs * 1000 + 1000) m = Math.max(m, e[key]);
+  }
   return m;
 }
 // seconds a gather takes: faster with level above the requirement, a better tool and a potion
@@ -142,23 +146,10 @@ function gatherTime(ch, node, now) {
 function stage(ch) { let i = 0; while (i < D.GATES.length && ch.gates && ch.gates[D.GATES[i].id]) i++; return i; }
 // what you own of an item: in the bag, in your hands, or as your tool
 const owned = (ch, id) => count(ch, id) + EQUIP_SLOTS.filter(s => ch.equip[s] === id).length + TOOL_SKILLS.filter(k => ch.tools[k] === id).length;
-// [id, still needed] for each thing a repair needs that you don't have enough of
-function missingFor(ch, gate) { return Object.keys(gate.needs).map(id => [id, gate.needs[id] - owned(ch, id)]).filter(x => x[1] > 0); }
-// take n of an item: from the bag first, then what is equipped. Returns the slots to empty.
-function takeOwned(ch, inv, id, n) {
-  let left = n - removeItem(inv, id, n);
-  const slots = [];
-  for (const s of EQUIP_SLOTS) if (left > 0 && ch.equip[s] === id) { slots.push(s); left--; }
-  for (const k of TOOL_SKILLS) if (left > 0 && ch.tools[k] === id) { slots.push("tool:" + k); left--; }
-  return slots;
-}
-function emptySlots(ch, slots, ev) {
-  for (const s of slots) {
-    const id = s.startsWith("tool:") ? ch.tools[s.slice(5)] : ch.equip[s];
-    if (s.startsWith("tool:")) ch.tools[s.slice(5)] = null; else ch.equip[s] = null;
-    ev.push({ t: "unequipped", id, slot: s, used: true });
-  }
-}
+// [id, still needed in the bag] for each thing a repair needs. Only the bag counts: what you hold or
+// use as a tool is never taken (take it off first if it's the one you want to give).
+function missingFor(ch, gate) { return Object.keys(gate.needs).map(id => [id, gate.needs[id] - count(ch, id)]).filter(x => x[1] > 0); }
+const inUse = (ch, id) => owned(ch, id) > count(ch, id);
 // keep three commissions open, newer ones likelier
 function refillJobs(ch, rnd) {
   const s = stage(ch);
@@ -215,13 +206,16 @@ function actUnsafe(ch, cmd, ctx) {
         const w = ctx.lookupNode(cmd.key);
         if (!w) return fail("Nothing to gather here");
         species = w.species; region = w.region; at = { x: w.x, d: w.d };
+        if (Number.isInteger(w.ri) && w.ri > stage(ch)) return fail("The road there isn't open yet");
       }
       const node = D.nodeFor(species, region);
       if (!node) return fail("Nothing to gather here");
       const xpMul = buffOf(ch, now, "xp");
       if (ctx.player && at && (Math.abs(ctx.player.x - at.x) > REACH_X || Math.abs(ctx.player.d - at.d) > REACH_D)) return fail("Too far away");
       if (level(ch, node.skill) < node.req) return fail(`Needs ${D.SKILLS[node.skill].name} ${node.req}`);
-      if (tooSoon(Math.max(minGatherTime(node), num(ctx.duration, 0, 60, gatherTime(ch, node, now))))) return fail("Not so fast");
+      // (a potion that was at work when the gather began still counts if it ran out since)
+      const potion = Math.max(buffOf(ch, now, "gather"), ctx.startedAt != null ? buffOf(ch, num(ctx.startedAt, 0, 1e15, now), "gather") : 1);
+      if (tooSoon(Math.max(minGatherTime(node, potion), num(ctx.duration, 0, 60, gatherTime(ch, node, now))))) return fail("Not so fast");
       const st = nodeState(ch, cmd.key, node, now);
       if (!st.ready) return fail("It needs time to grow back");
       const got = [];
@@ -324,13 +318,12 @@ function actUnsafe(ch, cmd, ctx) {
         if (!w || !ctx.player || Math.abs(ctx.player.x - w.x) > GATE_REACH) return fail("Too far away");
       }
       const miss = missingFor(ch, g);
-      if (miss.length) return fail("Still needs " + miss.map(([id, n]) => `${n} ${D.ITEMS[id].name}`).join(", "));
+      if (miss.length) return fail("Still needs " + miss.map(([id, n]) => `${n} ${D.ITEMS[id].name}${inUse(ch, id) ? " (take off the one you're using)" : ""}`).join(", "));
       if (tooSoon(REPAIR_TIME)) return fail("Not so fast");
-      const inv = copyInv(ch.inv), slots = [];
-      for (const id of Object.keys(g.needs)) slots.push(...takeOwned(ch, inv, id, g.needs[id]));
+      const inv = copyInv(ch.inv);
+      for (const id of Object.keys(g.needs)) removeItem(inv, id, g.needs[id]);
       for (const [id, n] of g.reward) if (addItem(inv, id, n) !== n) return fail("Your bag is full");
       ch.inv = inv;
-      emptySlots(ch, slots, ev);
       ch.gates[g.id] = true; ch.stats.repairs++;
       ev.push({ t: "repaired", id: g.id, end: !!g.end, stage: stage(ch) });
       for (const [id, n] of g.reward) ev.push({ t: "item", id, n, reward: true });
@@ -342,13 +335,12 @@ function actUnsafe(ch, cmd, ctx) {
       if (typeof id !== "string" || !ch.jobs.includes(id)) return fail("No such request");
       const j = D.jobById(id);
       if (!j) return fail("No such request");
-      if (owned(ch, j.item) < j.n) return fail(`Needs ${j.n} ${D.ITEMS[j.item].name}`);
+      if (count(ch, j.item) < j.n) return fail(owned(ch, j.item) >= j.n ? `Take off your ${D.ITEMS[j.item].name} first` : `Needs ${j.n} ${D.ITEMS[j.item].name}`);
       const inv = copyInv(ch.inv);
-      const slots = takeOwned(ch, inv, j.item, j.n);
+      removeItem(inv, j.item, j.n);
       const [rid, rn] = j.reward;
       if (addItem(inv, rid, rn) !== rn) return fail("Your bag is full");
       ch.inv = inv;
-      emptySlots(ch, slots, ev);
       ev.push({ t: "delivered", id, from: j.from });
       ev.push({ t: "item", id: rid, n: rn, reward: true });
       gainXp(ch, j.skill, Math.round(j.xp * buffOf(ch, now, "xp")), ev);

@@ -66,7 +66,7 @@ const css = `
 .legend-on #sheet { bottom: calc(var(--pad) + var(--sa-b) + var(--lg)); }
 .creating #hints, .journal-open #hints, .sheet-open #hints { opacity: 0 !important; }
 /* a controller on a phone or tablet: the on-screen controls step aside */
-.input-pad #touch-buttons, .input-pad #touch-zone, .input-pad .stick-ghost { display: none !important; }
+.input-pad #touch-buttons, .input-pad .stick-ghost { display: none !important; }
 .is-mobile.input-pad #hints { display: flex; }
 .pad-group { display: none; } .input-pad .pad-group { display: block; } .input-pad .keys-group { display: none; }
 `;
@@ -145,8 +145,9 @@ function setNav(on) {
   root.classList.toggle("nav-on", on);
   if (on && !cur) { const L = layer(); if (L) focus(initial(L, focusables(L))); }
 }
+function clearRings() { document.querySelectorAll(".pad-focus").forEach(n => n.classList.remove("pad-focus", "pressed")); }
 function focus(e) {
-  if (cur) ringOf(cur).classList.remove("pad-focus", "pressed");
+  clearRings();
   cur = e || null;
   if (!cur) return;
   const ring = ringOf(cur);
@@ -168,9 +169,12 @@ function move(dx, dy) {
   const list = focusables(L);
   if (!cur || !list.includes(cur)) { focus(initial(L, list)); return; }
   const a = ringOf(cur).getBoundingClientRect(), ax = a.left + a.width / 2, ay = a.top + a.height / 2;
+  const PART = ".j-head, .j-body, .sheet-head, .sheet-body, .cr-prev, .cr-main";
+  const part = cur.closest(PART);
   let best = null, bs = Infinity;
   for (const e of list) {
     if (e === cur || ringOf(e) === ringOf(cur)) continue;
+    if (dx && part && e.closest(PART) !== part) continue;
     const b = ringOf(e).getBoundingClientRect(), bx = b.left + b.width / 2, by = b.top + b.height / 2;
     let gap, centre, off, overlap;
     if (dx) {
@@ -192,7 +196,16 @@ function adjust(e, dir) {          // a slider: left / right change it in twenti
   e.value = Math.max(min, Math.min(max, +e.value + dir * step));
   e.dispatchEvent(new Event("input", { bubbles: true })); e.dispatchEvent(new Event("change", { bubbles: true }));
 }
+function adoptFocused(L) {
+  const a = document.activeElement;
+  if (!a || a === cur || a === document.body || !L.el.contains(a) || !a.matches(SEL)) return false;
+  if (a.tagName === "INPUT" && a.type === "text") return false;
+  focus(a); setNav(true);
+  return true;
+}
 function direction(dx, dy) {
+  const L = layer();
+  if (L) adoptFocused(L);
   // the first press only shows where the ring is
   if (!navOn || !cur) { setNav(true); if (!cur) { const L = layer(); if (L) focus(initial(L, focusables(L))); } return; }
   if (dx && cur.type === "range") { adjust(cur, dx); return; }
@@ -226,7 +239,7 @@ function cycleTabs(L, sel, d) {
   if (tabs.length < 2) return;
   const i = Math.max(0, tabs.findIndex(t => t.classList.contains("on") || (t.classList.contains("btn") && !t.classList.contains("ghost"))));
   tabs[(i + d + tabs.length) % tabs.length].click();
-  cur = null; pendingInit = sel;
+  clearRings(); cur = null; pendingInit = sel;
 }
 let pendingInit = "";
 
@@ -275,6 +288,7 @@ addEventListener("keydown", e => {
   if (!L || L.name === "title" || e.ctrlKey || e.metaKey || e.altKey) return;
   const dirs = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
   const typing = e.target.tagName === "INPUT" && e.target.type === "text";
+  if (e.key === "Tab") { clearRings(); cur = null; setNav(false); return; }
   if (dirs[e.key]) {
     if (typing && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;   // moving the text cursor
     e.preventDefault(); e.stopPropagation();
@@ -299,7 +313,7 @@ function tick(now) {
   const lname = L ? L.name : "";
   if (lname !== lastLayer) {
     lastLayer = lname;
-    if (cur) ringOf(cur).classList.remove("pad-focus");
+    clearRings();
     cur = null; curRect = null;
     if (L && navOn) focus(initial(L, focusables(L)));
     if (!L && UI.started) { const c = $("c"); if (c) c.focus({ preventScroll: true }); }
@@ -307,7 +321,10 @@ function tick(now) {
   renderLegend(L);
 
   const gp = pads()[0];
-  if (!gp) return;
+  if (!gp) {
+    if (UI.device === "pad") { Object.assign(UI.input, { ax: 0, ad: 0, jump: false, run: false }); prev.fill(false); runLatch = false; }
+    return;
+  }
   const kind = !/xbox|xinput|045e/i.test(gp.id) && /054c|dualsense|dualshock|playstation/i.test(gp.id) ? "ps" : "xbox";
   if (kind !== padKind) { padKind = kind; renderHints(); }
   const B = i => !!(gp.buttons[i] && (gp.buttons[i].pressed || gp.buttons[i].value > 0.5));
@@ -318,10 +335,12 @@ function tick(now) {
   const lx = dz(ax(0)), ly = dz(ax(1)), ry = dz(ax(3));
   const any = held.some(Boolean) || Math.abs(lx) > 0.3 || Math.abs(ly) > 0.3 || Math.abs(ry) > 0.3;
   if (any) setDevice("pad");
+  if (down.some(Boolean) && UI.sfxStart) UI.sfxStart();   // sound for players who only ever use the controller
   if (UI.device !== "pad") return;
 
   if (L) {
     // ---- menus
+    const wasNav = navOn;
     if (any) setNav(true);
     const eat = i => eaten.add(i);
     if (L.name === "title") {
@@ -331,7 +350,8 @@ function tick(now) {
     let dir = "";
     if (held[12]) dir = "u"; else if (held[13]) dir = "d"; else if (held[14]) dir = "l"; else if (held[15]) dir = "r";
     else if (Math.max(Math.abs(lx), Math.abs(ly)) > 0.55) dir = Math.abs(lx) > Math.abs(ly) ? (lx > 0 ? "r" : "l") : (ly > 0 ? "d" : "u");
-    if (dir && (dir !== navDir || now >= navNext)) {
+    if (dir && !wasNav) { navDir = dir; navNext = now + 340; }
+    else if (dir && (dir !== navDir || now >= navNext)) {
       navNext = now + (dir !== navDir ? 340 : 110);
       direction(dir === "l" ? -1 : dir === "r" ? 1 : 0, dir === "u" ? -1 : dir === "d" ? 1 : 0);
     }
@@ -374,6 +394,7 @@ function tick(now) {
   if (down[9]) { eaten.add(9); setNav(true); UI.toggleSheet(true); }
 }
 requestAnimationFrame(loop);
+addEventListener("gamepaddisconnected", () => { if (UI.device === "pad") Object.assign(UI.input, { ax: 0, ad: 0, jump: false, run: false }); });
 addEventListener("gamepadconnected", e => {
   if (window.RPGUI && UI.started) RPGUI.toast(`<span>${e.gamepad.id.replace(/\(.*\)/, "").trim().slice(0, 40) || "Controller"} connected</span>`);
 });

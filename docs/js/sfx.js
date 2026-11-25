@@ -15,10 +15,11 @@ function start() {
   if (!AC) return;
   try { ac = new AC(); } catch (e) { return; }
   master = ac.createGain(); master.connect(ac.destination); applyPref();
-  noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.5, ac.sampleRate);
+  noiseBuf = ac.createBuffer(1, ac.sampleRate * 1.0, ac.sampleRate);   // long enough for any burst from any start
   const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
 }
 ["pointerdown", "keydown", "touchend"].forEach(t => addEventListener(t, start, { capture: true, passive: true }));
+UI.sfxStart = start;
 function applyPref() { if (master) master.gain.value = pref.on ? Math.pow(pref.vol / 100, 1.6) * 0.8 : 0; }
 const ready = () => ac && ac.state === "running" && pref.on && pref.vol > 0;
 
