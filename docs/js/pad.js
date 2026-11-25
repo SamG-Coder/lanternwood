@@ -85,7 +85,7 @@ function renderPadGroup() {
   const r = (b, t) => `<span>${b.map(UI.btn).join(" ")}</span><span>${t}</span>`;
   g.innerHTML = `<h3>Controller</h3><div class="keys-list">
     ${r(["ls"], "Move (full tilt runs)")}${r(["a"], "Jump")}${r(["rt"], "Run")}${r(["x"], "Gather")}${r(["rb"], "Next thing in reach")}
-    ${r(["y"], "Journal")}${r(["view"], "Character")}${r(["start"], "Settings")}
+    ${r(["y"], "Journal: the road")}${r(["view"], "Character")}${r(["start"], "Settings")}
     ${r(["dpad"], "Move between options")}${r(["b"], "Back")}${r(["lb", "rb"], "Journal tabs")}${r(["rs"], "Scroll")}</div>`;
 }
 
@@ -196,12 +196,15 @@ function direction(dx, dy) {
   // the first press only shows where the ring is
   if (!navOn || !cur) { setNav(true); if (!cur) { const L = layer(); if (L) focus(initial(L, focusables(L))); } return; }
   if (dx && cur.type === "range") { adjust(cur, dx); return; }
+  const was = cur;
   move(dx, dy);
+  if (cur !== was && UI.sfx) UI.sfx("nav");
 }
 function activate() {
   if (!cur) return;
   const ring = ringOf(cur);
   ring.classList.add("pressed"); setTimeout(() => ring.classList.remove("pressed"), 120);
+  if (UI.sfx && !(cur.disabled)) UI.sfx("select");
   if (cur.type === "range") return;
   if (cur.tagName === "INPUT" && cur.type === "text") { cur.focus(); cur.select(); return; }
   if (cur.matches(".cell")) {        // an item: A goes to what you can do with it
@@ -213,6 +216,7 @@ function activate() {
   cur.click();
 }
 function back(L) {
+  if (UI.sfx && L.name !== "creator") UI.sfx("back");
   if (L.name === "sheet") UI.toggleSheet(false);
   else if (L.name === "journal" && cur && cur.matches("[data-do]") && L.el.querySelector(".cell.sel")) focus(L.el.querySelector(".cell.sel"));   // back to the bag
   else if (L.name === "journal" && window.RPGUI) RPGUI.closeJournal();
@@ -365,7 +369,7 @@ function tick(now) {
   UI.input.run = runLatch || val(7) > 0.3 || val(6) > 0.3 || Math.hypot(lx, ly) > 0.94;
   if (down[2]) Game.interact();
   if (down[5]) Game.nextTarget();
-  if (down[3] && window.RPGUI) { eaten.add(3); setNav(true); RPGUI.openJournal("bag"); }
+  if (down[3] && window.RPGUI) { eaten.add(3); setNav(true); RPGUI.openJournal("road"); }
   if (down[8] && window.RPGUI) { eaten.add(8); setNav(true); RPGUI.openJournal("char"); }
   if (down[9]) { eaten.add(9); setNav(true); UI.toggleSheet(true); }
 }

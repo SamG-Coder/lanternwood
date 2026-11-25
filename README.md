@@ -20,13 +20,14 @@ own 3D shape, so the light falls on it the way it would on the real thing.
 | Key | Action |
 |---|---|
 | **A / D** or **← / →** | Walk |
-| **W / S** or **↑ / ↓** | Move along the trail (toward or away from the camera) |
+| **W / S** or **↑ / ↓** | Walk up and down (toward or away from the camera) |
 | **Space** | Jump |
 | **Shift** | Run |
 | **[ / ]** | Time of day back / forward |
 | **T** | Pause or resume time |
 | **F** | Fullscreen |
-| **E** | Gather from the plant, log or rock in reach (**Tab** picks another) |
+| **E** | Gather from the plant, log or rock in reach, or mend what blocks the road (**Tab** picks another) |
+| **J** | Journal: the road ahead, commissions, curios |
 | **I / K / C** | Journal: bag, character and skills, crafting |
 | **H** | Settings: time of day, look, depth of field, bloom, haze, wind, light quality |
 
@@ -48,6 +49,16 @@ Needs a browser with WebGL2: any current desktop or mobile browser.
 
 ## The RPG
 
+- **Mend the old road.** Something blocks the way into every region: a fallen oak, a broken
+  footbridge, a rockfall, a smouldering pass, a collapsed terrace wall. Each needs things you
+  gather and craft (a staff to lever the trunk, cord and timber for the bridge, a pick for the
+  rockfall...), so every profession matters. Mend it and the next region opens. At the road's end
+  a broken waystone shrine waits to be restored.
+- **Commissions.** Travellers on the road ask for things: three requests at a time, for experience
+  and potions or materials, growing as the road opens up.
+- **Potions do things.** Faster gathering, double experience, a lighter stride and higher jumps,
+  or a keen eye for curios. Timers show on screen.
+- **Curios.** Twelve lost things, two in each region, turn up now and then while you gather.
 - **Classless.** There's no class to pick. You become what you practise: every skill levels from
   use, up to 50, and your total level is the sum of them all. What you carry (staff, bow, maul,
   buckler) decides how you play.
@@ -69,6 +80,7 @@ Needs a browser with WebGL2: any current desktop or mobile browser.
 - **Your character:** made in a character creator (build, skin, hair, clothes, cloak), drawn as a
   procedural pixel paper-doll. It's lit by the same traced light as the forest, with idle, walk,
   run, jump, gather, chop, quarry and craft animations. Gear you equip shows on the sprite.
+- **Sound:** small synthesized effects for work, finds, level-ups and menus (Settings → Sound).
 - **Saves** in your browser.
 - **Ready for multiplayer.** Every change to a character goes through one function,
   [`docs/js/state.js`](docs/js/state.js) `act()`. It has no DOM and runs in Node

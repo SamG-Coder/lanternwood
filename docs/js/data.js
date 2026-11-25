@@ -58,12 +58,12 @@ const ITEMS = {
   moss:         { name: "Rock Moss",         kind: "resource", icon: ["tuft", "#6a8a3a", "#4a6a2a"], desc: "Peeled from old boulders." },
   sandstone:    { name: "Sandstone",         kind: "resource", icon: ["rock", "#c8a070", "#9a7a50"], desc: "Warm, soft, easy to carve." },
   // alchemy
-  draught_minor:  { name: "Minor Healing Draught", kind: "potion", icon: ["flask", "#d0533f", "#e8dcc4"], desc: "Restores a little health." },
-  tonic_poppy:    { name: "Poppy Tonic",           kind: "potion", icon: ["flask", "#c03a5a", "#e8dcc4"], desc: "A calm, deep sleep." },
-  salve_fern:     { name: "Fernsalve",             kind: "potion", icon: ["jar", "#5f8f3a", "#d8c8a0"], desc: "Soothes cuts and stings." },
-  elixir_heather: { name: "Heathermist Elixir",    kind: "potion", icon: ["flask", "#a65ab8", "#e8dcc4"], desc: "Clears the head; a stride lighter." },
-  poultice_cotton:{ name: "Cotton Poultice",       kind: "potion", icon: ["jar", "#e8e4d8", "#9a8a6a"], desc: "Binds and heals." },
-  draught_greater:{ name: "Greater Healing Draught", kind: "potion", icon: ["flask", "#e04a3a", "#f0d890"], desc: "Restores a great deal of health." },
+  draught_minor:  { name: "Minor Healing Draught", kind: "potion", effect: "deft", icon: ["flask", "#d0533f", "#e8dcc4"], desc: "Soothes sore hands: you gather 15% faster for 2 minutes." },
+  tonic_poppy:    { name: "Poppy Tonic",           kind: "potion", effect: "keen", icon: ["flask", "#c03a5a", "#e8dcc4"], desc: "A calm, keen eye: curios turn up three times as often for 3 minutes." },
+  salve_fern:     { name: "Fernsalve",             kind: "potion", effect: "deft2", icon: ["jar", "#5f8f3a", "#d8c8a0"], desc: "Hands that never tire: you gather 25% faster for 3 minutes." },
+  elixir_heather: { name: "Heathermist Elixir",    kind: "potion", effect: "light", icon: ["flask", "#a65ab8", "#e8dcc4"], desc: "A stride lighter: you walk 20% faster and jump higher for 3 minutes." },
+  poultice_cotton:{ name: "Cotton Poultice",       kind: "potion", effect: "wise", icon: ["jar", "#e8e4d8", "#9a8a6a"], desc: "A clear head: double experience from everything for 2 minutes." },
+  draught_greater:{ name: "Greater Healing Draught", kind: "potion", effect: "hale", icon: ["flask", "#e04a3a", "#f0d890"], desc: "Strength for the road: gather 40% faster with double experience for 3 minutes." },
   // woodworking
   kindling:     { name: "Bundle of Kindling",  kind: "material", icon: ["sticks", "#b0884a", "#e0a040"], desc: "For campfires and forges." },
   cord:         { name: "Twisted Cord",        kind: "material", icon: ["cord", "#d0b880", "#9a8450"], desc: "Wheat stalks twisted tight. A bowstring." },
@@ -156,9 +156,96 @@ const RECIPES = [
   { id: "grindstone",      skill: "masonry", req: 30, xp: 138, time: 4.0, in: { sandblock: 3, oak: 2 } },
 ];
 
+// ---------------------------------------------------------------- potion effects
+// gather: speed multiplier; xp: experience multiplier; curio: curio chance multiplier; move / jump
+const EFFECTS = {
+  deft:  { name: "Deft hands",      secs: 120, gather: 1.15 },
+  keen:  { name: "Keen eye",        secs: 180, curio: 3 },
+  deft2: { name: "Tireless hands",  secs: 180, gather: 1.25 },
+  light: { name: "Light stride",    secs: 180, move: 1.2, jump: 1.18 },
+  wise:  { name: "Clear head",      secs: 120, xp: 2 },
+  hale:  { name: "Strength of the road", secs: 180, gather: 1.4, xp: 2 },
+};
+const BEST_POTION = Math.max(...Object.values(EFFECTS).map(e => e.gather || 1));
+
+// ---------------------------------------------------------------- the road: what blocks the way on
+// One obstacle at the start of each region after the first, in order; the last is the journey's end.
+// needs: what the repair uses up (gathered or crafted, all reachable before the obstacle).
+const GATES = [
+  { id: "trunk", region: 1, name: "The Fallen Oak", look: "logs",
+    desc: "A great trunk lies across the road into Beechwood Hollow. A sturdy staff will lever it aside if the ground is shored with stone.",
+    needs: { staff_hazel: 1, hazel: 3, granite: 2 }, reward: [["draught_minor", 2]] },
+  { id: "bridge", region: 2, name: "The Broken Footbridge", look: "snags",
+    desc: "The planks over Birchwater's stream have rotted through. Timber and good cord will mend it.",
+    needs: { weathered: 6, elder: 2, cord: 3 }, reward: [["tonic_poppy", 1], ["kindling", 2]] },
+  { id: "rockfall", region: 3, name: "The Rockfall", look: "boulders",
+    desc: "Stone has slid across the climb to Spruce Heights. Break it with a proper pick and prop the slope with willow.",
+    needs: { pick_stone: 1, granite: 6, willow: 2 }, reward: [["salve_fern", 1], ["whetstone", 1]] },
+  { id: "smoke", region: 4, name: "The Smouldering Pass", look: "snags",
+    desc: "Old fire still smoulders in the stumps on Ashen Ridge. Salve for your hands, birch to bridge the ash, heather to smother the embers.",
+    needs: { salve_fern: 2, birch: 4, heather: 3 }, reward: [["elixir_heather", 1]] },
+  { id: "terrace", region: 5, name: "The Fallen Terrace Wall", look: "boulders",
+    desc: "The wall below the Sunterrace has spilled over the road. Hard charred timber, a heavy maul and marram fibre to bind it.",
+    needs: { charred: 6, hammer_stone: 1, marram: 4 }, reward: [["poultice_cotton", 1]] },
+  { id: "shrine", region: 6, name: "The Old Waystone", look: "shrine", end: true,
+    desc: "At the road's end stands a broken waystone shrine. Set a carved waystone on sandstone blocks and anoint it, and the old road is whole again.",
+    needs: { waystone: 1, sandblock: 2, elixir_heather: 1 }, reward: [["draught_greater", 2]] },
+];
+const gateById = id => GATES.find(g => g.id === id) || null;
+
+// ---------------------------------------------------------------- commissions (requests from travellers on the road)
+// stage: how many obstacles must be cleared before it is offered. Three are open at a time.
+const JOBS = [
+  { id: "j_poppy",     stage: 0, from: "the herbwife",     item: "poppy",     n: 5, skill: "herbalism",    xp: 60,  reward: ["draught_minor", 1] },
+  { id: "j_dandelion", stage: 0, from: "a weary carter",   item: "dandelion", n: 6, skill: "herbalism",    xp: 60,  reward: ["draught_minor", 1] },
+  { id: "j_hazel",     stage: 0, from: "the hurdle-maker", item: "hazel",     n: 5, skill: "forestry",     xp: 70,  reward: ["kindling", 1] },
+  { id: "j_granite",   stage: 0, from: "a waller",         item: "granite",   n: 4, skill: "stonecutting", xp: 70,  reward: ["whetstone", 1] },
+  { id: "j_staff",     stage: 0, from: "an old pilgrim",   item: "staff_hazel", n: 1, skill: "woodworking", xp: 80, reward: ["draught_minor", 2] },
+  { id: "j_wheat",     stage: 0, from: "the thatcher",     item: "wheat",     n: 6, skill: "herbalism",    xp: 90,  reward: ["cord", 1] },
+  { id: "j_whetstone", stage: 0, from: "a woodcutter",     item: "whetstone", n: 1, skill: "masonry",      xp: 90,  reward: ["hazel", 3] },
+  { id: "j_bracken",   stage: 1, from: "a swineherd",      item: "bracken",   n: 5, skill: "herbalism",    xp: 120, reward: ["tonic_poppy", 1] },
+  { id: "j_bilberry",  stage: 1, from: "a child by the ford", item: "bilberry", n: 6, skill: "herbalism", xp: 140, reward: ["draught_minor", 2] },
+  { id: "j_logs",      stage: 1, from: "the charcoal-burner", item: "weathered", n: 5, skill: "forestry", xp: 130, reward: ["kindling", 2] },
+  { id: "j_cord",      stage: 1, from: "a fisher",         item: "cord",      n: 2, skill: "woodworking",  xp: 150, reward: ["wheat", 4] },
+  { id: "j_draught",   stage: 1, from: "a limping drover", item: "draught_minor", n: 1, skill: "alchemy",  xp: 160, reward: ["tonic_poppy", 1] },
+  { id: "j_willow",    stage: 2, from: "a basket-weaver",  item: "willow",    n: 4, skill: "forestry",     xp: 220, reward: ["draught_minor", 2] },
+  { id: "j_anemone",   stage: 2, from: "the herbwife",     item: "anemone",   n: 4, skill: "herbalism",    xp: 230, reward: ["salve_fern", 1] },
+  { id: "j_pick",      stage: 2, from: "a quarryman",      item: "pick_stone",n: 1, skill: "masonry",      xp: 240, reward: ["granite", 4] },
+  { id: "j_bow",       stage: 2, from: "a hunter",         item: "bow_willow",n: 1, skill: "woodworking",  xp: 320, reward: ["tonic_poppy", 2] },
+  { id: "j_birch",     stage: 3, from: "a cooper",         item: "birch",     n: 4, skill: "forestry",     xp: 360, reward: ["salve_fern", 1] },
+  { id: "j_heather",   stage: 3, from: "a beekeeper",      item: "heather",   n: 4, skill: "herbalism",    xp: 380, reward: ["elixir_heather", 1] },
+  { id: "j_salve",     stage: 3, from: "a ranger",         item: "salve_fern",n: 2, skill: "alchemy",      xp: 420, reward: ["poultice_cotton", 1] },
+  { id: "j_spruce",    stage: 3, from: "a luthier",        item: "spruce",    n: 3, skill: "forestry",     xp: 400, reward: ["elixir_heather", 1] },
+  { id: "j_charred",   stage: 4, from: "a smith",          item: "charred",   n: 4, skill: "forestry",     xp: 520, reward: ["poultice_cotton", 1] },
+  { id: "j_marram",    stage: 4, from: "a rope-walker",    item: "marram",    n: 5, skill: "herbalism",    xp: 520, reward: ["cord", 3] },
+  { id: "j_maul",      stage: 4, from: "a waller",         item: "hammer_stone", n: 1, skill: "masonry",   xp: 560, reward: ["elixir_heather", 1] },
+  { id: "j_sandstone", stage: 5, from: "a mason",          item: "sandstone", n: 4, skill: "stonecutting", xp: 700, reward: ["draught_greater", 1] },
+  { id: "j_greasewood",stage: 5, from: "a lamp-lighter",   item: "greasewood",n: 4, skill: "forestry",     xp: 640, reward: ["poultice_cotton", 1] },
+  { id: "j_elixir",    stage: 5, from: "a weary pilgrim",  item: "elixir_heather", n: 1, skill: "alchemy", xp: 760, reward: ["draught_greater", 1] },
+];
+const jobById = id => JOBS.find(j => j.id === id) || null;
+
+// ---------------------------------------------------------------- curios: rare finds, two lost in each region
+const CURIOS = [
+  { id: "c_button",  region: "Hearthmeadow",     name: "A Brass Button",   icon: ["disc", "#d9b56a", "#8a6a2a"], desc: "From a soldier's coat, long ago." },
+  { id: "c_ribbon",  region: "Hearthmeadow",     name: "A Faded Ribbon",   icon: ["ribbon", "#c85a6a", "#8a3a4a"], desc: "Tied once around a maypole." },
+  { id: "c_acorn",   region: "Beechwood Hollow", name: "A Silver Acorn",   icon: ["acorn", "#d0d4d8", "#8a8f96"], desc: "Cast, not grown. Someone's charm." },
+  { id: "c_key",     region: "Beechwood Hollow", name: "An Old Iron Key",  icon: ["key", "#7a7f88", "#4a4e54"], desc: "It opens nothing on this road." },
+  { id: "c_pearl",   region: "Birchwater Glade", name: "A River Pearl",    icon: ["pearl", "#f0eee6", "#b8b4a8"], desc: "Small, lopsided and lovely." },
+  { id: "c_flute",   region: "Birchwater Glade", name: "A Reed Flute",     icon: ["flute", "#b8b27a", "#6a6a3a"], desc: "It still plays one sad note." },
+  { id: "c_antler",  region: "Spruce Heights",   name: "A Shed Antler",    icon: ["antler", "#e2d6bc", "#9a8a6a"], desc: "From a stag that walks the heights." },
+  { id: "c_amber",   region: "Spruce Heights",   name: "A Bead of Amber",  icon: ["disc", "#e09a3a", "#9a5a1a"], desc: "A gnat, caught in the morning of the world." },
+  { id: "c_ember",   region: "Ashen Ridge",      name: "An Ember Stone",   icon: ["disc", "#e0563a", "#7a2a1a"], desc: "Still warm, years after the fire." },
+  { id: "c_bell",    region: "Ashen Ridge",      name: "A Cracked Bell",   icon: ["bell", "#b08a4a", "#6a5228"], desc: "From the chapel that burned." },
+  { id: "c_coin",    region: "Sunterrace Pines", name: "A Sun Coin",       icon: ["disc", "#f0c84a", "#a8862a"], desc: "Stamped with a face nobody remembers." },
+  { id: "c_feather", region: "Sunterrace Pines", name: "A Golden Feather", icon: ["feather", "#e8c060", "#a8803a"], desc: "From no bird that lives here now." },
+];
+const CURIO_CHANCE = 0.035;
+
 // what everyone starts with: worn tools (gathering always works, upgrades go faster)
 const START = { tools: { herbalism: 1.0, forestry: 1.0, stonecutting: 1.0 }, inv: [["draught_minor", 2]] };
 
-const api = { SKILLS, MAX_LEVEL, xpFor, levelOf, ITEMS, NODES, REGION_NODES, nodeFor, RECIPES, START };
+const api = { SKILLS, MAX_LEVEL, xpFor, levelOf, ITEMS, NODES, REGION_NODES, nodeFor, RECIPES, START,
+              EFFECTS, BEST_POTION, GATES, gateById, JOBS, jobById, CURIOS, CURIO_CHANCE };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.LWData = api;
 })(typeof self !== "undefined" ? self : this);

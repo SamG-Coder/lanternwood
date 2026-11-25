@@ -213,11 +213,11 @@
 </div>
 <div id="hints" class="hud glass">
   <div class="hint"><kbd>A</kbd><kbd>D</kbd> Walk</div>
-  <div class="hint"><kbd>W</kbd><kbd>S</kbd> Along the trail</div>
+  <div class="hint"><kbd>W</kbd><kbd>S</kbd> Up / down</div>
   <div class="hint"><kbd>Space</kbd> Jump</div>
   <div class="hint"><kbd>Shift</kbd> Run</div>
-  <div class="hint"><kbd>E</kbd> Gather</div>
-  <div class="hint"><kbd>I</kbd> Journal</div>
+  <div class="hint"><kbd>E</kbd> Gather / mend</div>
+  <div class="hint"><kbd>J</kbd> Road</div>
 </div>
 <div id="region-card"><div class="rc-name"></div><div class="rc-rule"></div><div class="rc-sub"></div></div>
 <div id="notice">
@@ -257,6 +257,10 @@
       <label class="row"><span>Bloom</span><output></output><input id="bloom" type="range" min="0" max="100" value="45"></label>
       <label class="row"><span>Distance haze</span><output></output><input id="haze" type="range" min="0" max="100" value="55"></label>
     </section>
+    <section class="group"><h3>Sound</h3>
+      <label class="row"><span>Sound effects</span><span class="switch"><input id="sfx" type="checkbox" checked><i></i></span></label>
+      <label class="row"><span>Volume</span><output></output><input id="vol" type="range" min="0" max="100" value="60"></label>
+    </section>
     <section class="group"><h3>World</h3>
       <label class="row"><span>Wind</span><output></output><input id="wind" type="range" min="0" max="30" value="10"></label>
     </section>
@@ -267,10 +271,11 @@
     <section class="group keys-group"><h3>Keys</h3>
       <div class="keys-list">
         <span><kbd>A</kbd> <kbd>D</kbd></span><span>Walk left / right</span>
-        <span><kbd>W</kbd> <kbd>S</kbd></span><span>Move along the trail</span>
+        <span><kbd>W</kbd> <kbd>S</kbd></span><span>Walk up and down, on or off the road</span>
         <span><kbd>Space</kbd></span><span>Jump</span>
         <span><kbd>Shift</kbd></span><span>Run</span>
         <span><kbd>E</kbd></span><span>Gather from the plant, log or rock in reach</span>
+        <span><kbd>J</kbd></span><span>The road: what blocks the way, commissions, curios</span>
         <span><kbd>I</kbd> <kbd>K</kbd> <kbd>C</kbd></span><span>Bag, character, crafting</span>
         <span><kbd>[</kbd> <kbd>]</kbd></span><span>An hour back / forward</span>
         <span><kbd>T</kbd></span><span>Pause or resume time</span>
@@ -316,14 +321,15 @@
   <div id="load-err"></div>
 </div></div>
 
-<script>window.LW_V = {"js/character.js":"f21db5df5f","js/data.js":"aa687efde6","js/decoder.js":"83985796f9","js/game.js":"bf3ef5968b","js/pad.js":"b7ad19ebd1","js/rpg-ui.js":"b8f7d41cf4","js/rtpack.js":"348fa4f0de","js/state.js":"0b1bc65b9f","js/ui.js":"bf6afe49b7","data/world.rtp":"108286b1d7"};</script>
+<script>window.LW_V = {"js/character.js":"f21db5df5f","js/data.js":"a8836b3294","js/decoder.js":"83985796f9","js/game.js":"e47a13496b","js/pad.js":"6a4eed673a","js/rpg-ui.js":"dca5cfcaa4","js/rtpack.js":"348fa4f0de","js/sfx.js":"ac6885b86d","js/state.js":"8877d19039","js/ui.js":"bf6afe49b7","data/world.rtp":"108286b1d7"};</script>
 <script src="js/ui.js?v=bf6afe49b7"></script>
-<script src="js/data.js?v=aa687efde6"></script>
-<script src="js/state.js?v=0b1bc65b9f"></script>
+<script src="js/data.js?v=a8836b3294"></script>
+<script src="js/state.js?v=8877d19039"></script>
 <script src="js/character.js?v=f21db5df5f"></script>
-<script src="js/rpg-ui.js?v=b8f7d41cf4"></script>
-<script src="js/pad.js?v=b7ad19ebd1"></script>
+<script src="js/rpg-ui.js?v=dca5cfcaa4"></script>
+<script src="js/sfx.js?v=ac6885b86d"></script>
+<script src="js/pad.js?v=6a4eed673a"></script>
 <script src="js/rtpack.js?v=348fa4f0de"></script>
-<script src="js/game.js?v=bf3ef5968b"></script>
+<script src="js/game.js?v=e47a13496b"></script>
 </body>
 </html>

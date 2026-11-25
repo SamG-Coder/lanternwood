@@ -532,6 +532,34 @@ function allocTargets() {
 }
 allocTargets();
 
+// ---------------------------------------------------------------- the road's obstacles
+// Each obstacle (LWData.GATES) is a line of baked props across everything the player can walk, at the
+// start of its region; the journey's end (the shrine) stands on the road near the end of the world.
+const GATES = LWData.GATES;
+const gateX = GATES.map(g => g.end ? LEN - 14 : (world.regions[g.region] ? world.regions[g.region].x0 : LEN - 14));
+{
+  const names = Object.keys(catalog.variants);
+  const bySpecies = sp => names.filter(n => catalog.variants[n].species === sp && Object.keys(catalog.variants[n].scales).length);
+  // the scale bucket the bake used for things at depth d, taken from the nearest baked object
+  const sAt = (vname, d) => {
+    let best = null, bd = 1e9;
+    for (const o of world.objects) { const dd = Math.abs(o.d - d); if (dd < bd) { bd = dd; best = o.s; } }
+    const have = Object.keys(catalog.variants[vname].scales).map(Number);
+    return have.reduce((a, b) => Math.abs(b - best) < Math.abs(a - best) ? b : a, have[0]);
+  };
+  const looks = { logs: ["Prop_Logs", "Prop_Logs", "Prop_Boulders"], snags: ["Prop_Snags", "Prop_Logs", "Prop_Snags"], boulders: ["Prop_Boulders", "Prop_Boulders", "Prop_Logs"], shrine: ["Prop_Boulders"] };
+  GATES.forEach((g, gi) => {
+    const kinds = looks[g.look] || looks.logs;
+    const depths = g.end ? [PATH[0] + 1.2, PATH[1] - 1.0] : [D_NEAR + 0.3, 12.2, 13.4, 14.6, 15.8, 17.1, D_FAR - 0.2];
+    depths.forEach((d, i) => {
+      const vars = bySpecies(kinds[i % kinds.length]); if (!vars.length) return;
+      const v = vars[(gi * 3 + i) % vars.length];
+      world.objects.push({ v, s: sAt(v, d), x: gateX[gi] + ((i * 37 + gi * 11) % 7 - 3) * 0.13, d, f: (i + gi) % 2, gate: g.id });
+    });
+  });
+  world.objects.sort((a, b) => b.d - a.d);   // far to near, as the renderer draws them
+}
+
 // ---------------------------------------------------------------- canopy volume
 // A top-down grid of the world (0.5 m cells): crown bottom, crown top, leaf density (per metre),
 // and trunk / rock density below the crown. Built once from the layout and the baked crown shapes.
@@ -614,12 +642,14 @@ const objects = world.objects.map((o, i) => {
   const species = v ? v.species : "";
   const region = regionAt(o.x).name;
   return { ...o, id: i + 1, phase: (o.x * 0.137 + o.d * 0.05) % 6.283, species, region,
-           node: LWData.nodeFor(species, region), key: `${o.v}@${o.x.toFixed(1)},${o.d.toFixed(1)}`, hidden: false };
+           node: o.gate ? null : LWData.nodeFor(species, region), key: `${o.v}@${o.x.toFixed(1)},${o.d.toFixed(1)}`, hidden: false };
 });
 const nodeObjects = objects.filter(o => o.node && o.x > -2 && o.x < LEN + 2 && o.d > PATH[0] - 4.5 && o.d < PATH[1] + 4.5);
 // the world's own record of every node, by key (what a server would look up; commands can't forge it)
 const nodeByKey = new Map(nodeObjects.map(o => [o.key, o]));
 const lookupNode = key => { const o = nodeByKey.get(key); return o ? { species: o.species, region: o.region, x: o.x, d: o.d } : null; };
+const gateProps = id => objects.filter(o => o.gate === id);
+const lookupGate = id => { const i = GATES.findIndex(g => g.id === id); return i < 0 ? null : { x: gateX[i] }; };
 const sprites = new Map();   // file -> {tex, meta, state}
 function spriteFor(o) {
   const v = catalog.variants[o.v];
@@ -692,7 +722,7 @@ function rebuildPlayer(force) {
 // ---------------------------------------------------------------- the character (game state)
 const SAVE_KEY = "lanternwood.save.v1";
 // a signature of this world's layout: saved node state only applies to the world it was made in
-const WORLD_SIG = (() => { let h = 5381; for (const o of objects) { const k = o.key; for (let i = 0; i < k.length; i++) h = ((h * 33) ^ k.charCodeAt(i)) >>> 0; } return objects.length + ":" + h.toString(36); })();
+const WORLD_SIG = (() => { let h = 5381; for (const o of objects) { if (o.gate) continue; const k = o.key; for (let i = 0; i < k.length; i++) h = ((h * 33) ^ k.charCodeAt(i)) >>> 0; } return objects.filter(o => !o.gate).length + ":" + h.toString(36); })();
 let ch = null, saveBlocked = false;
 const listeners = [];
 function emit(events) { for (const f of listeners) try { f(events); } catch (e) { console.error(e); } }
@@ -706,6 +736,14 @@ try {
   }
 } catch (e) { ch = null; }
 if (ch && ch.world !== WORLD_SIG) { ch.nodes = LWState.nodeMap(); ch.world = WORLD_SIG; }
+if (ch) GATES.forEach((g, i) => { if (!g.end && ch.pos.x > gateX[i] + 1 && LWState.stage(ch) === i) ch.gates[g.id] = true; });
+// mended obstacles are gone from the road (and from the light)
+function syncGates() {
+  for (const g of GATES) {
+    const hide = !!(ch && ch.gates[g.id]) && !g.end;
+    for (const o of gateProps(g.id)) if (o.hidden !== hide) { o.hidden = hide; restampAround(o); }
+  }
+}
 function save() {
   if (!ch || saveBlocked) return;
   ch.pos = { x: +st.x.toFixed(2), d: +st.d.toFixed(2) }; ch.time = +st.time.toFixed(3); ch.world = WORLD_SIG;
@@ -726,6 +764,7 @@ function dispatch(cmd, extra) {
   for (const e of ev) {
     if (e.t === "spent" && e.hide) { const o = objects.find(q => q.key === e.key); if (o) { o.hidden = true; restampAround(o); } }
     if (e.t === "equipped" || e.t === "unequipped") rebuildPlayer();
+    if (e.t === "repaired") syncGates();
   }
   emit(ev); save();
   return ev;
@@ -749,7 +788,8 @@ const st = {
   camX: 6, time: 8.5, flow: true, region: -1, toastT: 0,
   action: null, target: null, animT: 0, moved: 0, ran: 0, jumps: 0, saveT: 0, cycle: 0, choices: 0,
 };
-if (ch) { st.x = ch.pos.x; st.d = ch.pos.d; st.camX = st.x + 3; st.time = ch.time; syncNodes(); }
+if (ch) { st.x = ch.pos.x; st.d = Math.max(D_NEAR, Math.min(D_FAR, ch.pos.d)); st.camX = st.x + 3; st.time = ch.time; syncNodes(); }
+syncGates();
 rebuildPlayer(true);
 // the game, as seen by the interface (rpg-ui.js)
 window.Game = {
@@ -758,15 +798,24 @@ window.Game = {
   create(name, look) {
     ch = LWState.newCharacter(name, look, Date.now());
     ch.pos = { x: st.x, d: st.d }; ch.time = st.time; ch.world = WORLD_SIG; saveBlocked = false;
-    rebuildPlayer(true); save(); emit([{ t: "created" }]);
+    rebuildPlayer(true); syncGates(); save(); emit([{ t: "created" }]);
   },
   setLook(look) { if (!ch) return; ch.look = look; rebuildPlayer(); save(); emit([{ t: "look" }]); },
   dispatch: cmd => {
     // gear and bag changes wait until the current gather or craft is done
-    if (st.action && cmd && ["equip", "unequip", "drop", "use"].includes(cmd.t)) { emit([{ t: "error", why: "Finish what you're doing first" }]); return []; }
+    if (st.action && cmd && ["equip", "unequip", "drop", "use", "deliver"].includes(cmd.t)) { emit([{ t: "error", why: "Finish what you're doing first" }]); return []; }
     return dispatch(cmd);
   },
   choices: () => st.choices,
+  regionName: i => world.regions[i] ? world.regions[i].name : "the road's end",
+  // the road: the next obstacle, how far along, and what it still needs
+  road() {
+    if (!ch) return null;
+    const i = LWState.stage(ch), g = GATES[i] || null;
+    return { stage: i, total: GATES.length, gate: g, x: g ? gateX[i] : 0, here: g ? Math.abs(st.x - gateX[i]) < 3.2 : false,
+             beyond: g && world.regions[g.region] ? world.regions[g.region].name : "",
+             missing: g ? LWState.missingFor(ch, g) : [], done: GATES.filter(q => ch.gates[q.id]).map(q => q.id), atX: st.x };
+  },
   craft(id) {
     const r = LWData.RECIPES.find(x => x.id === id);
     if (!ch || !r) return;
@@ -803,8 +852,16 @@ function candidates() {
   out.sort((a, b) => a[0] - b[0]);
   return out.map(c => c[1]);
 }
+function gateTarget() {
+  if (!ch) return null;
+  const i = LWState.stage(ch), g = GATES[i];
+  if (!g || Math.abs(st.x - gateX[i]) > 3.2) return null;
+  const props = gateProps(g.id), near = props.reduce((a, o) => !a || Math.abs(o.d - st.d) < Math.abs(a.d - st.d) ? o : a, null);
+  return { gate: g, x: gateX[i], d: near ? near.d : st.d, id: near ? near.id : -5, v: near ? near.v : null };
+}
 function findTarget() {
-  const list = candidates();
+  const gt = gateTarget();
+  const list = gt ? [gt, ...candidates()] : candidates();
   st.choices = list.length;
   if (!list.length) { st.cycle = 0; return null; }
   return list[st.cycle % list.length];
@@ -813,6 +870,13 @@ function interact() {
   if (!ch || st.action || !st.onGround) return;
   const o = st.target;
   if (!o) return;
+  if (o.gate) {        // mend the obstacle, or show what it still needs
+    if (LWState.missingFor(ch, o.gate).length) { emit([{ t: "gateinfo", id: o.gate.id }]); return; }
+    st.facing = o.x >= st.x ? 1 : -1;
+    st.action = { kind: "repair", o, t: 0, dur: LWState.REPAIR_TIME, anim: o.gate.look === "boulders" ? "mine" : "chop", startedAt: Date.now() };
+    emit([{ t: "start", kind: "repair", dur: LWState.REPAIR_TIME }]);
+    return;
+  }
   const node = o.node, lvl = LWState.level(ch, node.skill);
   if (lvl < node.req) { emit([{ t: "error", why: `Needs ${LWData.SKILLS[node.skill].name} ${node.req}` }]); return; }
   const ns = LWState.nodeState(ch, o.key, node, Date.now());
@@ -820,7 +884,7 @@ function interact() {
   if (!LWState.roomForNode(ch, node)) { emit([{ t: "error", why: "Your bag is full" }]); return; }
   st.facing = o.x >= st.x ? 1 : -1;
   const anim = node.skill === "forestry" ? (node.deplete && o.species.startsWith("Shrub") ? "gather" : "chop") : node.skill === "stonecutting" ? "mine" : "gather";
-  const dur = LWState.gatherTime(ch, node);
+  const dur = LWState.gatherTime(ch, node, Date.now());
   st.action = { kind: "gather", o, t: 0, dur, anim, startedAt: Date.now() };
   emit([{ t: "start", kind: "gather", dur }]);
 }
@@ -828,7 +892,7 @@ function update(dt) {
   const menus = document.documentElement.classList;
   const busyUI = menus.contains("journal-open") || menus.contains("sheet-open") || menus.contains("creating");
   const inp = UI.started && ch && !busyUI ? UI.input : { ax: 0, ad: 0, jump: false, run: false };
-  const bonus = ch ? LWState.agilityBonus(ch) : 1;
+  const bonus = ch ? LWState.agilityBonus(ch, Date.now()) : 1;
   const run = inp.run ? 1.9 : 1.0;
   // moving or jumping ends an action
   if (st.action && (Math.abs(inp.ax) > 0.3 || Math.abs(inp.ad) > 0.3 || inp.jump)) { st.action = null; emit([{ t: "cancel" }]); }
@@ -836,9 +900,10 @@ function update(dt) {
   st.vx += (ax * 3.4 * run * bonus - st.vx) * Math.min(1, dt * 10);
   const x0 = st.x, d0 = st.d;
   st.x = Math.max(1, Math.min(LEN - 1, st.x + st.vx * dt));
+  if (ch) { const i = LWState.stage(ch); if (GATES[i] && !GATES[i].end && st.x > gateX[i] - 1.1) { st.x = gateX[i] - 1.1; if (st.vx > 0) st.vx = 0; } }
   st.d = Math.max(D_NEAR, Math.min(D_FAR, st.d + ad * 2.2 * run * bonus * dt));
   if (ax) st.facing = Math.sign(ax);
-  if (st.onGround && inp.jump && !st.action) { st.vh = 5.2; st.onGround = false; st.jumps++; }
+  if (st.onGround && inp.jump && !st.action) { st.vh = 5.2 * (ch ? Math.sqrt(LWState.buffOf(ch, Date.now(), "jump")) : 1); st.onGround = false; st.jumps++; }
   st.vh -= 15 * dt; st.h += st.vh * dt;
   if (st.h <= 0) { st.h = 0; st.vh = 0; st.onGround = true; }
   st.walkT += Math.abs(st.vx) * dt * 2.2;
@@ -851,11 +916,14 @@ function update(dt) {
   if (st.action) {
     const a = st.action;
     a.t += dt;
+    a.hitT = (a.hitT || 0) + dt;
+    if (a.hitT > 0.55 && a.t < a.dur) { a.hitT = 0; emit([{ t: "hit", kind: a.anim }]); }
     if (a.t >= a.dur) {
       st.action = null;
       if (a.kind === "gather") dispatch({ t: "gather", key: a.o.key },
                                         { player: { x: st.x, d: st.d }, lookupNode, startedAt: a.startedAt, duration: a.dur });
       else if (a.kind === "craft") dispatch({ t: "craft", id: a.recipe.id }, { startedAt: a.startedAt });
+      else if (a.kind === "repair") dispatch({ t: "repair", id: a.o.gate.id }, { player: { x: st.x, d: st.d }, lookupGate, startedAt: a.startedAt });
     }
   }
   st.target = !ch ? null : st.action ? (st.action.o || null) : findTarget();
@@ -887,6 +955,14 @@ function playerFrame() {
 function promptInfo() {
   const o = st.target;
   if (!o || !ch) return null;
+  const dpr0 = devicePixelRatio || 1, offX0 = Math.floor((canvas.width - VW * st.scale) / 2), offY0 = Math.floor((canvas.height - VH * st.scale) / 2);
+  if (o.gate) {
+    const ppm = F / o.d, vx = VW / 2 + (o.x - st.camX) * ppm, vy = HOR + (2.6 - HC) * ppm;
+    const miss = LWState.missingFor(ch, o.gate);
+    return { x: (offX0 + vx * st.scale) / dpr0, y: (canvas.height - offY0 - Math.min(vy, VH - 8) * st.scale) / dpr0,
+             gate: true, name: o.gate.name, ok: !miss.length, missing: miss.length, verb: "Mend",
+             progress: st.action && st.action.o === o ? st.action.t / st.action.dur : -1, more: !st.action && st.choices > 1 };
+  }
   const v = catalog.variants[o.v];
   const ppm = F / o.d;
   const top = Math.min(v ? v.height : 1, o.node.deplete ? 2.2 : 3.4);

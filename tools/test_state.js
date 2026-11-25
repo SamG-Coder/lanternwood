@@ -192,5 +192,107 @@ ok(!S.roomForNode(full(0), D.NODES.Field_Poppy) && S.roomForNode(full(1), D.NODE
   ok(S.act(c, { t: "gather", key: "z2", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, startedAt: t - fastest * 1000, duration: 0 }).some(e => e.t === "item"), "the fastest real gather still passes");
   ok(Object.getPrototypeOf(S.nodeMap()) === null, "nodeMap has no prototype");
 }
+// ---- the road, commissions, potions, curios
+const give = (c, id, n) => { for (let i = 0; i < c.inv.length && n; i++) if (!c.inv[i]) { const k = Math.min(n, S.STACK); c.inv[i] = { id, n: k }; n -= k; } };
+// every requirement exists, and every gate / job item is a real item
+for (const g of D.GATES) for (const id of [...Object.keys(g.needs), ...g.reward.map(r => r[0])]) ok(D.ITEMS[id], "gate item exists: " + id);
+for (const j of D.JOBS) ok(D.ITEMS[j.item] && D.ITEMS[j.reward[0]] && D.SKILLS[j.skill], "job well formed: " + j.id);
+for (const id in D.ITEMS) if (D.ITEMS[id].kind === "potion") ok(D.EFFECTS[D.ITEMS[id].effect], "potion has an effect: " + id);
+// a new character has three stage-0 commissions, all different
+{
+  const c = S.newCharacter("R", {}, t);
+  ok(c.jobs.length === 3 && new Set(c.jobs).size === 3 && c.jobs.every(id => D.jobById(id).stage === 0), "three stage-0 jobs");
+  ok(S.stage(c) === 0, "stage 0 at the start");
+}
+// repairs: in order, need everything, consume it, give the reward, advance the stage
+{
+  const c = S.newCharacter("R", {}, t);
+  ok(S.act(c, { t: "repair", id: "bridge" }, { now: t })[0].why === "The road before it needs mending first", "gates in order");
+  let e = S.act(c, { t: "repair", id: "trunk" }, { now: t });
+  ok(e[0].t === "error" && /Still needs/.test(e[0].why) && /Hazel Rod/.test(e[0].why), "missing items listed");
+  give(c, "hazel", 3); give(c, "granite", 2); give(c, "staff_hazel", 1);
+  // equip the staff: it still counts, and is taken from your hand
+  const slot = c.inv.findIndex(x => x && x.id === "staff_hazel");
+  S.act(c, { t: "equip", slot }, { now: t });
+  ok(c.equip.main === "staff_hazel" && S.owned(c, "staff_hazel") === 1, "equipped staff owned");
+  ok(S.act(c, { t: "repair", id: "trunk" }, { now: t, player: { x: 0 }, lookupGate: () => ({ x: 50 }) })[0].why === "Too far away", "repair reach");
+  ok(S.act(c, { t: "repair", id: "trunk" }, { now: t, startedAt: t - 500 })[0].why === "Not so fast", "repair takes time");
+  e = S.act(c, { t: "repair", id: "trunk" }, { now: t, player: { x: 49 }, lookupGate: () => ({ x: 50 }), startedAt: t - 3000 });
+  ok(e.some(x => x.t === "repaired" && x.id === "trunk"), "trunk mended");
+  ok(e.some(x => x.t === "unequipped" && x.used), "equipped staff used up");
+  ok(c.equip.main === null && S.count(c, "hazel") === 0 && S.count(c, "granite") === 0, "needs consumed");
+  ok(S.count(c, "draught_minor") === 4, "reward given");
+  ok(S.stage(c) === 1, "stage 1");
+  ok(S.act(c, { t: "repair", id: "trunk" }, { now: t })[0].why === "Already mended", "no double repair");
+  // the save keeps it; a forged save can't skip ahead
+  const r = S.load(JSON.stringify(c));
+  ok(r.gates.trunk === true && S.stage(r) === 1, "gate state saved");
+  const forged = JSON.parse(JSON.stringify(c)); forged.gates = { shrine: true, __proto__: { x: 1 }, nope: true };
+  ok(S.stage(S.load(JSON.stringify(forged))) === 0, "stage counts only mended gates in order");
+}
+// a full bag refuses the repair and changes nothing
+{
+  const c = S.newCharacter("F", {}, t);
+  for (let i = 0; i < c.inv.length; i++) c.inv[i] = { id: "moss", n: S.STACK };
+  c.inv[0] = { id: "hazel", n: 4 }; c.inv[1] = { id: "granite", n: 3 }; c.inv[2] = { id: "staff_hazel", n: 2 };
+  const before = JSON.stringify(c);
+  const e = S.act(c, { t: "repair", id: "trunk" }, { now: t });
+  ok(e[0].why === "Your bag is full" && JSON.stringify(c) === before, "full bag: no repair, nothing lost");
+}
+// commissions
+{
+  const c = S.newCharacter("J", {}, t);
+  c.jobs = ["j_poppy", "j_hazel", "j_granite"];
+  ok(S.act(c, { t: "deliver", id: "j_poppy" }, { now: t })[0].why === "Needs 5 Poppy Petals", "deliver needs items");
+  ok(S.act(c, { t: "deliver", id: "j_wheat" }, { now: t })[0].t === "error", "only open jobs");
+  ok(S.act(c, { t: "deliver", id: "__proto__" }, { now: t })[0].t === "error", "junk job id refused");
+  give(c, "poppy", 7);
+  const e = S.act(c, { t: "deliver", id: "j_poppy" }, { now: t, rng: () => 0.5 });
+  ok(e.some(x => x.t === "delivered") && S.count(c, "poppy") === 2, "delivered and taken");
+  ok(c.skills.herbalism === 60, "job xp");
+  ok(c.jobs.length === 3 && !c.jobs.includes("j_poppy") && new Set(c.jobs).size === 3, "a new job replaces it");
+  ok(c.stats.jobs === 1, "jobs counted");
+  const forged = JSON.parse(JSON.stringify(c)); forged.jobs = ["j_elixir", "j_poppy", "j_poppy", "zzz", 5];
+  const r = S.load(JSON.stringify(forged));
+  ok(!r.jobs.includes("j_elixir") && r.jobs.length === 3 && new Set(r.jobs).size === 3, "load drops jobs beyond the stage and duplicates");
+}
+// potions
+{
+  const c = S.newCharacter("P", {}, t);
+  const slot = c.inv.findIndex(x => x && x.id === "draught_minor");
+  const e = S.act(c, { t: "use", slot }, { now: t });
+  ok(e[0].t === "used" && e[0].effect === "deft" && e[0].until === t + 120000, "draught gives deft hands");
+  const node = D.NODES.Field_Poppy;
+  ok(Math.abs(S.gatherTime(c, node, t + 1000) - node.time / 1.15) < 1e-9, "gathers 15% faster");
+  ok(S.gatherTime(c, node, t + 121000) === node.time, "and wears off");
+  ok(S.gatherTime(c, node) === node.time, "no time given: no potion");
+  give(c, "poultice_cotton", 1);
+  S.act(c, { t: "use", slot: c.inv.findIndex(x => x && x.id === "poultice_cotton") }, { now: t });
+  S.act(c, { t: "gather", key: "pp", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t + 10, rng: () => 0.99 });
+  ok(c.skills.herbalism === 16, "double xp");
+  give(c, "elixir_heather", 1);
+  S.act(c, { t: "use", slot: c.inv.findIndex(x => x && x.id === "elixir_heather") }, { now: t });
+  ok(Math.abs(S.agilityBonus(c, t + 5) - 1.2) < 1e-9 && S.agilityBonus(c, t + 400000) === 1, "light stride");
+  const forged = JSON.parse(JSON.stringify(c)); forged.buffs = { deft: "x", bogus: 9e14, constructor: 5 };
+  const r = S.load(JSON.stringify(forged));
+  ok(Object.keys(r.buffs).join() === "deft" && r.buffs.deft === 0, "load keeps only real effects");
+  // the fastest gather is still bounded with the best tool and the best potion
+  const c2 = S.newCharacter("Q", {}, t);
+  ok(S.act(c2, { t: "gather", key: "q1", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, startedAt: t, duration: 0 })[0].why === "Not so fast", "zero duration still refused");
+}
+// curios: found in the node's region, never twice, all of them findable
+{
+  const c = S.newCharacter("C", {}, t);
+  let found = [];
+  for (let i = 0; i < 40; i++) {
+    const e = S.act(c, { t: "gather", key: "cu" + i, species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, rng: () => 0.001 });
+    found.push(...e.filter(x => x.t === "curio").map(x => x.id));
+  }
+  ok(found.length === 2 && new Set(found).size === 2 && found.every(id => D.CURIOS.find(x => x.id === id).region === "Hearthmeadow"), "two Hearthmeadow curios, once each");
+  const none = S.act(c, { t: "gather", key: "cux", species: "Field_Poppy", region: "Hearthmeadow" }, { now: t, rng: () => 0.001 });
+  ok(!none.some(x => x.t === "curio"), "none left there");
+  const r = S.load(JSON.stringify({ ...JSON.parse(JSON.stringify(c)), curios: ["c_button", "c_button", "fake", 3] }));
+  ok(r.curios.join() === "c_button", "load cleans curios");
+}
 console.log(fails ? `${fails} failed` : "all state checks passed");
 process.exit(fails ? 1 : 0);
