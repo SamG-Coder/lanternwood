@@ -29,14 +29,29 @@ async function fetchWithProgress(url, onProgress) {
 (async function main() {
 try {
 // the world ships as one RTPack file (docs/js/rtpack.js): layout, catalog and every sprite
-const packBuf = await fetchWithProgress("data/world.rtp", f => UI.setProgress(f * 0.6));
+UI.setStage("Fetching the world");
+const packBuf = await fetchWithProgress("data/world.rtp", f => { UI.setProgress(f * 0.6); UI.setStage(`Fetching the world · ${Math.round(f * 100)}%`); });
 const pack = RTPack.openFile(packBuf);
 const world = pack.meta.world, catalog = pack.meta.catalog;
-const decoder = new Worker("js/decoder.js");
-decoder.postMessage({ init: packBuf.buffer.slice(0) });
+UI.setStage("Preparing the light");
+// sprites decode in a worker; if the worker cannot start or stalls, they decode here instead
 const pending = new Map();
-let reqId = 0;
-decoder.onmessage = e => { const cb = pending.get(e.data.id); pending.delete(e.data.id); if (cb) cb(e.data); };
+let reqId = 0, decoder = null, workerOk = true;
+function workerFailed(why) {
+  if (!workerOk) return;
+  workerOk = false;
+  console.warn("decode worker unavailable, decoding on the main thread:", why);
+  const left = [...pending.values()]; pending.clear();
+  left.forEach(job => job.retry());
+}
+try {
+  if (/[?&]noworker/.test(location.search)) throw new Error("disabled by ?noworker");   // debug: test the fallback
+  decoder = new Worker("js/decoder.js");
+  decoder.onerror = e => { e.preventDefault && e.preventDefault(); workerFailed(e.message || "worker error"); };
+  decoder.onmessageerror = () => workerFailed("message error");
+  decoder.onmessage = e => { const job = pending.get(e.data.id); pending.delete(e.data.id); if (job) job.done(e.data); };
+  decoder.postMessage({ init: packBuf.buffer.slice(0) });
+} catch (e) { workerOk = false; }
 const CAM = world.camera, VW = CAM.vw, VH = CAM.vh, F = CAM.f, HC = CAM.height, HOR = CAM.horizon;
 const PATH = world.path, LEN = world.length;
 
@@ -44,7 +59,7 @@ const PATH = world.path, LEN = world.length;
 const canvas = $("c");
 const gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
 if (!gl) throw new Error("WebGL2 is required");
-if (!gl.getExtension("EXT_color_buffer_float")) throw new Error("EXT_color_buffer_float is required");
+if (!gl.getExtension("EXT_color_buffer_float")) throw new Error("This device's graphics can't render to floating-point targets (EXT_color_buffer_float), which the lighting needs.");
 gl.getExtension("OES_texture_float_linear");
 
 function compile(type, src) {
@@ -83,6 +98,7 @@ function target(textures) {
   return fb;
 }
 gl.bindVertexArray(gl.createVertexArray());
+canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); fail(new Error("The graphics device was reset. Reload the page to continue.")); });
 
 // ---------------------------------------------------------------- shaders
 const COMMON = `#version 300 es
@@ -548,19 +564,33 @@ function request(s) {
   if (s.state !== 0) return;
   s.state = 1; queue.push(s); pump();
 }
+function finish(s, r) {
+  inflight--;
+  if (r.error) { console.warn(s.meta.file, r.error); s.state = 3; }
+  else {
+    try { s.tex = texture(r.w * 4, r.h, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, r.strip); s.state = 2; }
+    catch (e) { console.warn(s.meta.file, e); s.state = 3; }
+  }
+  decodedCount++;
+  pump();
+}
+function decodeHere(s) {
+  try { const d = pack.sprite(s.meta.file); return { w: d.w, h: d.h, strip: d.strip }; }
+  catch (e) { return { error: String(e) }; }
+}
+let decodedCount = 0;
 function pump() {
   while (inflight < 6 && queue.length) {
     const s = queue.shift(); inflight++;
+    if (!workerOk) { finish(s, decodeHere(s)); continue; }
     const id = ++reqId;
-    pending.set(id, r => {
-      inflight--;
-      if (r.error) { console.warn(s.meta.file, r.error); s.state = 3; }
-      else {
-        s.tex = texture(r.w * 4, r.h, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, r.strip);
-        s.state = 2;
-      }
-      pump();
-    });
+    const job = {
+      done: r => { clearTimeout(job.timer); finish(s, r); },
+      retry: () => { clearTimeout(job.timer); finish(s, decodeHere(s)); },
+    };
+    // a stalled worker (no answer in 10 s) is treated as a failed one
+    job.timer = setTimeout(() => { if (pending.has(id)) workerFailed("timeout"); }, 10000);
+    pending.set(id, job);
     decoder.postMessage({ id, file: s.meta.file });
   }
 }
@@ -746,8 +776,15 @@ function setRect(prog, x0, y0, x1, y1, vw, vh) { gl.uniform4f(prog.u.u_rect, x0,
 function bindTex(prog, list) { list.forEach(([name, t], i) => { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(prog.u[name], i); }); }
 const windAt = (x, t) => { const tt = t - x / 25; return 0.55 + 0.3 * Math.sin(tt * 0.45) + 0.2 * Math.sin(tt * 1.3 + 1.7) + 0.12 * Math.sin(tt * 3.1 + 0.4); };
 
-let last = performance.now(), loadedOnce = false, fpsN = 0, fpsT = last;
+let last = performance.now(), loadedOnce = false, loadStart = 0, fpsN = 0, fpsT = last, dead = false;
+// one bad frame must not freeze the game silently: report it and stop
 function frame(now) {
+  if (dead) return;
+  try { frameBody(now); }
+  catch (e) { dead = true; fail(e); return; }
+  if (!benching) requestAnimationFrame(frame);
+}
+function frameBody(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   update(dt);
   const t = now / 1000, camX = st.camX;
@@ -805,6 +842,7 @@ function frame(now) {
     if (r[2] < -margin || r[0] > VW + margin || r[3] < 0 || r[1] > VH) continue;
     if (s.state === 0) request(s);
     if (r[2] < 0 || r[0] > VW) continue;
+    if (s.state === 3) continue;              // failed: skip it, never hold up loading
     if (s.state !== 2) { waiting++; continue; }
     const m = s.meta;
     const hs = (m.h - m.base) / 100;
@@ -900,11 +938,12 @@ function frame(now) {
   if (!loadedOnce) {
     const total = drawn + waiting;
     UI.setProgress(0.6 + (total ? 0.4 * drawn / total : 0));
-    if (waiting === 0 && drawn > 0) { loadedOnce = true; UI.ready(); }
+    UI.setStage(total ? `Growing the forest · ${drawn} / ${total}` : "Growing the forest");
+    if (!loadStart) loadStart = now;
+    if ((waiting === 0 && drawn > 0) || now - loadStart > 20000) { loadedOnce = true; UI.ready(); }
   }
   fpsN++;
   if (now - fpsT > 1000) { window.__fps = fpsN; window.__drawn = drawn; fpsN = 0; fpsT = now; }
-  if (!benching) requestAnimationFrame(frame);
 }
 // debug: time n frames rendered back to back (works while the tab is hidden)
 let benching = false;

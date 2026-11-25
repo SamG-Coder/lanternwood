@@ -17,11 +17,18 @@ const UI = window.UI = {
 };
 
 // ---------------------------------------------------------------- loading + title
+UI.setStage = t => { if (!root.classList.contains("has-error")) $("load-text").textContent = t; };
+// anything that goes wrong before or during play is shown, never a silent hang
+addEventListener("error", e => { if (!root.classList.contains("is-loaded")) UI.error(e.message || String(e.error)); });
+addEventListener("unhandledrejection", e => { if (!root.classList.contains("is-loaded")) UI.error(String(e.reason && e.reason.message || e.reason)); });
 UI.setProgress = f => { $("load-bar").style.transform = `scaleX(${Math.max(0, Math.min(1, f))})`; };
-UI.error = msg => { $("load-text").textContent = "Something went wrong"; $("load-err").textContent = msg; root.classList.add("has-error"); };
+UI.error = msg => {
+  if (root.classList.contains("is-loaded")) {           // after loading: bring the loader back to show it
+    root.classList.remove("is-loaded"); $("loader").style.display = "";
+  } $("load-text").textContent = "Something went wrong"; $("load-err").textContent = msg; root.classList.add("has-error"); };
 UI.ready = () => {
   root.classList.add("is-loaded");
-  setTimeout(() => $("loader").remove(), 900);
+  setTimeout(() => { if (root.classList.contains("is-loaded")) $("loader").style.display = "none"; }, 900);
   $("begin").focus({ preventScroll: true });
 };
 function begin() {
